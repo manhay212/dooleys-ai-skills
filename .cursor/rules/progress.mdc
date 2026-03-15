@@ -1,0 +1,21 @@
+---
+alwaysApply: true
+description: "Rules for tracking project progress and maintaining state across sessions"
+---
+
+# Project Progress Protocol
+
+- **Before starting any task:** Read `.cursor/PROGRESS.md` to understand where the last session ended.
+- **During the task:** If a significant milestone is reached or a decision is made, update `.cursor/PROGRESS.md`.
+- **After finishing a task:** Summarize the current state concisely, what was completed, and what the "Next Step" is in `.cursor/PROGRESS.md`.
+- **Never assume state:** If `.cursor/PROGRESS.md` is missing or outdated, ask the user for a status update before proceeding.
+
+## Progress Update Format
+
+When updating PROGRESS.md, include:
+- Current status and active task
+- Completed components (with checkboxes)
+- Next steps (prioritized)
+- Key decisions made
+- Blockers or issues encountered
+- Notes for next session

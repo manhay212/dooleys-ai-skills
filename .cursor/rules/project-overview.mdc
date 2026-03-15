@@ -1,0 +1,126 @@
+---
+alwaysApply: true
+description: "Core project overview for Custom Skills development"
+---
+
+# Project Overview
+
+## Project Name
+**Custom Skills for AI Agents**
+
+A repository for developing reusable, self-contained skills that extend AI agent capabilities. Each skill follows the Claude Skills framework conventions and includes complete implementation, documentation, and configuration.
+
+## Project Purpose
+
+This project serves as a centralized location for building and maintaining custom skills that can be used by AI agents (particularly Claude-based agents) to perform specialized tasks. Each skill is:
+- **Self-contained**: Includes all code, dependencies, and configuration
+- **Well-documented**: Contains SKILL.md following Claude Skills framework
+- **Production-ready**: Working code with proper error handling
+- **Secure**: Authentication keys stored locally within skill folders
+
+## Project Structure
+
+```
+Custom_Skills/
+├── dooleys-twitter-x-reader/     # Example: Twitter API skill
+│   ├── SKILL.md                   # Claude Skills framework documentation
+│   ├── README.md                  # Setup and installation guide
+│   ├── src/                       # Source code
+│   │   └── index.py              # Main implementation
+│   ├── config/                    # Configuration files
+│   │   ├── credentials.json      # API keys (gitignored)
+│   │   └── config.example.json   # Example configuration
+│   ├── requirements.txt          # Python dependencies
+│   └── tests/                     # Test files (optional)
+├── dooleys-{skill-name}/         # Future skills follow same pattern
+└── .cursor/                      # Cursor rules and progress tracking
+```
+
+## Skill Naming Convention
+
+All skills follow the pattern: **`dooleys-{skill-name}`**
+
+Examples:
+- `dooleys-twitter-x-reader` - Twitter/X API integration
+- `dooleys-{future-skill}` - Additional skills as needed
+
+## Skill Requirements
+
+Each skill folder MUST contain:
+
+1. **SKILL.md** - Claude Skills framework documentation with:
+   - YAML frontmatter (name, description, version)
+   - Clear description of when to use the skill
+   - Step-by-step instructions for the AI agent
+   - Code templates and examples
+   - Input/output examples
+
+2. **README.md** - Human-readable documentation with:
+   - Overview and purpose
+   - Installation steps
+   - Configuration instructions
+   - Usage examples
+   - Dependencies list
+
+3. **Working Code** - Functional implementation:
+   - Main entry point (e.g., `src/index.py`)
+   - Proper error handling
+   - Type hints where applicable
+   - Logging for debugging
+
+4. **Configuration** - Authentication and settings:
+   - `config/credentials.json` (gitignored)
+   - `config/config.example.json` (template)
+   - Environment variable examples if needed
+
+5. **Dependencies** - `requirements.txt` or equivalent:
+   - All required libraries
+   - Version pinning for stability
+
+## Development Standards
+
+### Code Quality
+- **Type Hints**: Use type hints for function parameters and returns
+- **Error Handling**: Comprehensive try-except blocks with meaningful messages
+- **Logging**: Use Python's `logging` module for debugging
+- **Docstrings**: Google-style docstrings for all functions and classes
+
+### Security
+- **Never commit credentials**: All `credentials.json` files must be in `.gitignore`
+- **Use example files**: Provide `config.example.json` templates
+- **Environment variables**: Use `.env` files when appropriate (document in README)
+
+### Documentation
+- **SKILL.md**: Follow Claude Skills framework format exactly
+- **README.md**: Clear setup instructions for humans
+- **Code comments**: Explain complex logic and API interactions
+
+## Claude Skills Framework
+
+Skills are triggered when user requests match their descriptions. The AI agent:
+1. Reads SKILL.md files in the project
+2. Matches user intent to skill descriptions
+3. Follows step-by-step instructions in SKILL.md
+4. Executes the skill's code
+5. Returns results in the expected format
+
+## Current Skills
+
+- **dooleys-twitter-x-reader** (Planned) - Fetch user posts from Twitter/X API v2
+
+## Development Workflow
+
+1. **Before starting**: Read `.cursor/PROGRESS.md` for current state
+2. **Create skill folder**: Follow naming convention `dooleys-{skill-name}`
+3. **Implement code**: Build working functionality first
+4. **Write SKILL.md**: Document for AI agent following Claude framework
+5. **Write README.md**: Document for human developers
+6. **Test thoroughly**: Ensure skill works end-to-end
+7. **Update progress**: Document completion in `.cursor/PROGRESS.md`
+
+## Important Notes
+
+- Each skill is **independent** - no shared dependencies between skills
+- Skills should be **reusable** across different projects
+- Authentication is **per-skill** - each skill manages its own credentials
+- Skills follow **Claude Skills framework** conventions for maximum compatibility

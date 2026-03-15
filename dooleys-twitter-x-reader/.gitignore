@@ -1,0 +1,33 @@
+# Credentials and sensitive data
+config/credentials.json
+*.json
+!handles.json.example
+!config/credentials.example.json
+!package.json
+!package-lock.json
+
+# Output files
+output_*.json
+last_run.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

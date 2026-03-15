@@ -1,0 +1,223 @@
+---
+alwaysApply: true
+description: "Rules and conventions for developing new skills"
+---
+
+# Skill Development Guide
+
+## Creating a New Skill
+
+### Step 1: Create Skill Folder Structure
+
+```bash
+mkdir -p dooleys-{skill-name}/{src,config,tests}
+```
+
+Required files:
+- `SKILL.md` - Claude Skills framework documentation
+- `README.md` - Human documentation
+- `src/index.py` - Main implementation (or appropriate entry point)
+- `config/config.example.json` - Configuration template
+- `requirements.txt` - Python dependencies
+- `.gitignore` - Exclude credentials.json
+
+### Step 2: SKILL.md Format
+
+Every SKILL.md MUST start with YAML frontmatter:
+
+```yaml
+---
+name: dooleys-{skill-name}
+description: Clear description of when this skill should be used. This determines when the AI agent will invoke it.
+version: 1.0.0
+---
+```
+
+Required sections in SKILL.md:
+
+1. **Description Section**
+   - When to use this skill
+   - What problem it solves
+   - Prerequisites or setup needed
+
+2. **Instructions Section**
+   - Step-by-step guide for the AI agent
+   - Clear, actionable steps
+   - Include code examples inline
+
+3. **Configuration Section**
+   - How to set up authentication
+   - Required environment variables
+   - Configuration file format
+
+4. **Usage Examples**
+   - Input examples
+   - Expected output format
+   - Error handling examples
+
+5. **Templates (Optional)**
+   - Code templates the agent can use
+   - Common patterns
+   - Boilerplate code
+
+### Step 3: Implementation Standards
+
+#### Code Structure
+
+```python
+# src/index.py example structure
+import logging
+from typing import Dict, Any, Optional
+import json
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration from file or environment."""
+    # Implementation
+    pass
+
+def main_function(param1: str, param2: int) -> Dict[str, Any]:
+    """
+    Main function that performs the skill's primary task.
+    
+    Args:
+        param1: Description
+        param2: Description
+        
+    Returns:
+        Dict with results
+        
+    Raises:
+        SpecificError: When something goes wrong
+    """
+    try:
+        # Implementation
+        pass
+    except Exception as e:
+        logger.error(f"Error in main_function: {e}")
+        raise
+```
+
+#### Error Handling
+
+- Always use try-except blocks
+- Log errors with context
+- Return meaningful error messages
+- Don't expose sensitive information in errors
+
+#### Authentication
+
+- Store credentials in `config/credentials.json`
+- Provide `config/config.example.json` template
+- Document required API keys in README.md
+- Use environment variables when appropriate
+
+### Step 4: README.md Content
+
+The README.md should include:
+
+1. **Overview**
+   - What the skill does
+   - Use cases
+
+2. **Installation**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. **Configuration**
+   - Copy `config.example.json` to `config/credentials.json`
+   - Fill in API keys
+   - Set environment variables if needed
+
+4. **Usage**
+   - Code examples
+   - Command-line usage if applicable
+   - Integration examples
+
+5. **Dependencies**
+   - List all required packages
+   - Version requirements
+
+6. **Troubleshooting**
+   - Common issues
+   - Error messages and solutions
+
+### Step 5: Testing
+
+Before considering a skill complete:
+- [ ] Code runs without errors
+- [ ] Authentication works
+- [ ] Error cases are handled gracefully
+- [ ] SKILL.md is clear and complete
+- [ ] README.md has all setup steps
+- [ ] Example configuration is provided
+
+## Skill Template Checklist
+
+When creating a new skill, ensure:
+
+- [ ] Folder name follows `dooleys-{skill-name}` convention
+- [ ] SKILL.md has YAML frontmatter with name, description, version
+- [ ] SKILL.md has clear instructions for AI agent
+- [ ] README.md has complete setup instructions
+- [ ] Working code in `src/` directory
+- [ ] `config/config.example.json` template provided
+- [ ] `config/credentials.json` in `.gitignore`
+- [ ] `requirements.txt` with all dependencies
+- [ ] Code has type hints and docstrings
+- [ ] Error handling is comprehensive
+- [ ] Logging is implemented
+
+## Common Patterns
+
+### API Integration Skills
+
+```python
+# Pattern for API-based skills
+import requests
+from typing import Dict, Any
+
+def call_api(endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Make API call with error handling."""
+    try:
+        response = requests.get(endpoint, params=params)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API call failed: {e}")
+        raise
+```
+
+### Configuration Loading
+
+```python
+# Pattern for loading configuration
+from pathlib import Path
+import json
+import os
+
+def load_credentials() -> Dict[str, Any]:
+    """Load credentials from config file."""
+    config_path = Path(__file__).parent.parent / "config" / "credentials.json"
+    
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"Credentials not found at {config_path}. "
+            "Copy config.example.json to credentials.json and fill in values."
+        )
+    
+    with open(config_path) as f:
+        return json.load(f)
+```
+
+## Best Practices
+
+1. **Keep skills focused**: One skill = one domain/functionality
+2. **Make them reusable**: Don't hardcode project-specific values
+3. **Document thoroughly**: Both for AI (SKILL.md) and humans (README.md)
+4. **Handle errors gracefully**: Always provide helpful error messages
+5. **Test before committing**: Ensure the skill works end-to-end
+6. **Version your skills**: Update version in SKILL.md frontmatter
