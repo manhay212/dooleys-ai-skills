@@ -23,7 +23,16 @@ logger = logging.getLogger(__name__)
 # Constants
 CREDENTIALS_FILE = Path(__file__).parent / "config" / "credentials.json"
 HANDLES_FILE = Path(__file__).parent / "handles.json"
-LAST_RUN_FILE = Path(__file__).parent / "last_run.json"
+
+
+def get_last_run_file(function_name: str) -> Path:
+    """Get the last run file path for a specific function."""
+    filename_map = {
+        'get_users_tweets': 'last_run_getUsersTweets.json',
+        'get_home_timeline': 'last_run_getHomeTimeline.json'
+    }
+    filename = filename_map.get(function_name, f'last_run_{function_name}.json')
+    return Path(__file__).parent / filename
 
 
 def load_credentials() -> Dict[str, Any]:
@@ -71,26 +80,47 @@ def load_handles() -> List[str]:
     return data['usernames']
 
 
-def load_last_run() -> Optional[str]:
-    """Load the last run timestamp from last_run.json."""
-    if not LAST_RUN_FILE.exists():
+def load_last_run(function_name: str) -> Optional[str]:
+    """Load the last run timestamp from the function-specific last run file."""
+    last_run_file = get_last_run_file(function_name)
+    if not last_run_file.exists():
         return None
     
-    with open(LAST_RUN_FILE, 'r') as f:
+    with open(last_run_file, 'r') as f:
         data = json.load(f)
     
     return data.get('last_run_time')
 
 
-def save_last_run() -> None:
-    """Save the current timestamp to last_run.json."""
-    current_time = datetime.now(timezone.utc).isoformat()
+def format_rfc3339(dt: datetime) -> str:
+    """
+    Format datetime to RFC3339 format required by Twitter API.
+    Format: yyyy-MM-dd'T'HH:mm:ss[.SSS]Z
+    Twitter requires: yyyy-MM-dd'T'HH:mm:ss[.SSS]X where X is timezone (Z or +00:00)
+    We use Z for UTC to match Twitter's preferred format.
+    """
+    # Ensure timezone-aware datetime (UTC)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    elif dt.tzinfo != timezone.utc:
+        dt = dt.astimezone(timezone.utc)
+    
+    # Format with milliseconds (3 digits) and Z for UTC
+    # strftime %f gives microseconds (6 digits), we take first 3 for milliseconds
+    formatted = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+    return formatted
+
+
+def save_last_run(function_name: str) -> None:
+    """Save the current timestamp to the function-specific last run file."""
+    current_time = format_rfc3339(datetime.now(timezone.utc))
     data = {'last_run_time': current_time}
     
-    with open(LAST_RUN_FILE, 'w') as f:
+    last_run_file = get_last_run_file(function_name)
+    with open(last_run_file, 'w') as f:
         json.dump(data, f, indent=2)
     
-    logger.info(f"Saved last run time: {current_time}")
+    logger.info(f"Saved last run time for {function_name}: {current_time}")
 
 
 def get_users_tweets() -> None:
@@ -112,7 +142,8 @@ def get_users_tweets() -> None:
             logger.warning("No handles found in handles.json. Exiting.")
             return
         
-        last_run_time = load_last_run()
+        function_name = 'get_users_tweets'
+        last_run_time = load_last_run(function_name)
         
         # Initialize tweepy client with bearer token only
         client = tweepy.Client(bearer_token=bearer_token, wait_on_rate_limit=True)
@@ -142,8 +173,21 @@ def get_users_tweets() -> None:
                 
                 # Add start_time if last_run exists
                 if last_run_time:
-                    search_params['start_time'] = last_run_time
-                    logger.info(f"Using start_time: {last_run_time}")
+                    # Ensure start_time is in RFC3339 format
+                    # If it's already in the correct format, use it; otherwise parse and reformat
+                    try:
+                        # Try to parse the stored time and reformat to ensure RFC3339 compliance
+                        if '+' in last_run_time or last_run_time.endswith('+00:00'):
+                            # Parse and reformat to RFC3339 with Z
+                            dt = datetime.fromisoformat(last_run_time.replace('Z', '+00:00'))
+                            search_params['start_time'] = format_rfc3339(dt)
+                        else:
+                            # Already in correct format (ends with Z)
+                            search_params['start_time'] = last_run_time
+                    except Exception as e:
+                        logger.warning(f"Error parsing last_run_time, using as-is: {e}")
+                        search_params['start_time'] = last_run_time
+                    logger.info(f"Using start_time: {search_params['start_time']}")
                 
                 # Search for tweets
                 response = client.search_recent_tweets(**search_params)
@@ -198,7 +242,7 @@ def get_users_tweets() -> None:
         logger.info(f"Saved {len(all_tweets)} tweets to {output_file}")
         
         # Update last run time
-        save_last_run()
+        save_last_run(function_name)
         
     except Exception as e:
         logger.error(f"Error in get_users_tweets(): {e}")
@@ -224,7 +268,8 @@ def get_home_timeline() -> None:
             wait_on_rate_limit=True
         )
         
-        last_run_time = load_last_run()
+        function_name = 'get_home_timeline'
+        last_run_time = load_last_run(function_name)
         
         # Build tweet fields
         tweet_fields = ['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text']
@@ -241,8 +286,21 @@ def get_home_timeline() -> None:
         
         # Add start_time if last_run exists
         if last_run_time:
-            timeline_params['start_time'] = last_run_time
-            logger.info(f"Using start_time: {last_run_time}")
+            # Ensure start_time is in RFC3339 format
+            # If it's already in the correct format, use it; otherwise parse and reformat
+            try:
+                # Try to parse the stored time and reformat to ensure RFC3339 compliance
+                if '+' in last_run_time or last_run_time.endswith('+00:00'):
+                    # Parse and reformat to RFC3339 with Z
+                    dt = datetime.fromisoformat(last_run_time.replace('Z', '+00:00'))
+                    timeline_params['start_time'] = format_rfc3339(dt)
+                else:
+                    # Already in correct format (ends with Z)
+                    timeline_params['start_time'] = last_run_time
+            except Exception as e:
+                logger.warning(f"Error parsing last_run_time, using as-is: {e}")
+                timeline_params['start_time'] = last_run_time
+            logger.info(f"Using start_time: {timeline_params['start_time']}")
         
         # Get home timeline
         logger.info("Fetching home timeline...")
@@ -285,7 +343,7 @@ def get_home_timeline() -> None:
         logger.info(f"Saved {len(tweets_data)} tweets to {output_file}")
         
         # Update last run time
-        save_last_run()
+        save_last_run(function_name)
         
     except Exception as e:
         logger.error(f"Error in get_home_timeline(): {e}")
