@@ -136,7 +136,7 @@ python3 twitter.py get_users_tweets
 **Output:**
 - File: `output_get_users_tweets.json`
 - Format: JSON with timestamp, total_tweets count, and tweets array
-- Each tweet includes: id, text, created_at, author_id, public_metrics, referenced_tweets
+- Each tweet includes: id, text, created_at, author_id, username, public_metrics, referenced_tweets, url
 
 ### Function 2: get_home_timeline
 
@@ -144,29 +144,33 @@ python3 twitter.py get_users_tweets
 
 **Steps:**
 1. Load credentials from `config/credentials.json`
-2. Check `last_run_getHomeTimeline.json` for the last execution time (if exists)
-3. Initialize tweepy Client with OAuth 1.0a credentials:
+2. Initialize tweepy Client with OAuth 1.0a credentials:
    - consumer_key (oauth1_consumerKey)
    - consumer_secret (oauth1_consumerSecret)
    - access_token (oauth1_accessToken)
    - access_token_secret (oauth1_accessTokenSecret)
-4. Set tweet_fields: `['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text']`
-5. Set expansions: `['referenced_tweets.id']`
-6. Set max_results: 100
-7. If last_run_time exists, add start_time parameter
-8. Call `client.get_home_timeline()` with the parameters
-9. Write tweets to `output_get_home_timeline.json`
-10. Update `last_run_getHomeTimeline.json` with current timestamp
+3. Determine the time window using the `--post-age-within` argument (hours):
+   - If provided (e.g. `--post-age-within 48`), use that many hours
+   - If not provided, default to 48 hours
+4. Compute `start_time` as: `now_utc - post_age_within_hours` (in RFC3339 format)
+5. Set tweet_fields: `['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text']`
+6. Set expansions: `['referenced_tweets.id', 'author_id']`
+7. Set user_fields: `['username', 'name']`
+8. Set max_results: 30
+9. Call `client.get_home_timeline()` with the parameters (including `start_time`)
+10. For each tweet, build a map of `author_id -> username` from the `includes.users` section
+11. Construct the tweet URL as `https://x.com/{username}/status/{id}` and add it to each tweet item
+12. Write tweets to `output_get_home_timeline.json`
 
 **Command:**
 ```bash
-python3 twitter.py get_home_timeline
+python3 twitter.py get_home_timeline --post-age-within 48
 ```
 
 **Output:**
 - File: `output_get_home_timeline.json`
 - Format: JSON with timestamp, total_tweets count, and tweets array
-- Each tweet includes: id, text, created_at, author_id, public_metrics, referenced_tweets
+- Each tweet includes: id, text, created_at, author_id, username, public_metrics, referenced_tweets, url
 
 ## Usage Examples
 
@@ -222,6 +226,8 @@ Both functions output JSON files with this structure:
       "text": "Tweet content here...",
       "created_at": "2024-01-27T11:00:00+00:00",
       "author_id": "123456",
+      "username": "someuser",
+      "url": "https://x.com/someuser/status/1234567890",
       "public_metrics": {
         "retweet_count": 10,
         "like_count": 50,
@@ -241,21 +247,12 @@ Both functions output JSON files with this structure:
 
 ## Last Run Tracking
 
-The skill automatically tracks the last execution time separately for each function:
+The skill tracks the last execution time only for `get_users_tweets()`:
 - `last_run_getUsersTweets.json` for `get_users_tweets()`
-- `last_run_getHomeTimeline.json` for `get_home_timeline()`
 
-This ensures:
-- Subsequent runs of each function only fetch tweets newer than that function's last run
-- Avoids duplicate tweet retrieval per function
-- Enables independent incremental updates for each function
-
-Each last run file uses this format:
-```json
-{
-  "last_run_time": "2024-01-27T12:00:00.000Z"
-}
-```
+For `get_home_timeline()`, the time window is controlled explicitly via the `--post-age-within` argument:
+- Default: 48 hours (last 2 days)
+- You can override this per run (e.g. `--post-age-within 12` for last 12 hours).
 
 ## Error Handling
 

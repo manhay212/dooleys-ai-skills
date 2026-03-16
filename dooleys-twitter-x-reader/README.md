@@ -93,13 +93,13 @@ This will:
 #### Fetch Home Timeline
 
 ```bash
-python3 twitter.py get_home_timeline
+python3 twitter.py get_home_timeline --post-age-within 48
 ```
 
 This will:
 - Fetch your home timeline (posts Twitter suggests)
 - Save results to `output_get_home_timeline.json`
-- Update `last_run_getHomeTimeline.json` with execution timestamp
+ - Fetch tweets from approximately the last 48 hours (default window, configurable)
 
 ### Python Import
 
@@ -127,6 +127,8 @@ Both functions generate JSON files with the following structure:
       "text": "Tweet content...",
       "created_at": "2024-01-27T11:00:00+00:00",
       "author_id": "123456",
+      "username": "someuser",
+      "url": "https://x.com/someuser/status/1234567890",
       "public_metrics": {
         "retweet_count": 10,
         "like_count": 50,
@@ -146,16 +148,12 @@ Both functions generate JSON files with the following structure:
 
 ## Last Run Tracking
 
-The skill automatically tracks execution time separately for each function:
+The skill automatically tracks execution time only for `get_users_tweets()`:
 - `last_run_getUsersTweets.json` for `get_users_tweets()`
-- `last_run_getHomeTimeline.json` for `get_home_timeline()`
 
-This ensures:
-- Only new tweets are fetched on subsequent runs of each function
-- Avoids duplicate data per function
-- Enables independent incremental updates
-
-The `start_time` parameter is automatically added to API calls if the corresponding last run file exists.
+For `get_home_timeline()`, the time window is controlled explicitly via the `--post-age-within` option:
+- Default: 48 hours (if not provided)
+- Example: `python3 twitter.py get_home_timeline --post-age-within 24` fetches tweets from roughly the last 24 hours.
 
 ## File Structure
 
@@ -172,7 +170,6 @@ dooleys-twitter-x-reader/
 ├── handles.json                    # Usernames to track (create from example)
 ├── handles.json.example            # Example handles file
 ├── last_run_getUsersTweets.json    # Last execution timestamp for get_users_tweets (auto-generated)
-├── last_run_getHomeTimeline.json   # Last execution timestamp for get_home_timeline (auto-generated)
 ├── output_get_users_tweets.json   # Output from get_users_tweets (auto-generated)
 └── output_get_home_timeline.json  # Output from get_home_timeline (auto-generated)
 ```
@@ -195,8 +192,10 @@ Both functions use these Twitter API v2 parameters:
 
 - **tweet.fields**: `note_tweet` - Supports Twitter's long-form content
 - **expansions**: `referenced_tweets.id` - Includes quoted tweets, replies
-- **max_results**: `100` - Maximum tweets per request
-- **start_time**: Automatically added from the corresponding last run file if available
+- **max_results**: `100` for `get_users_tweets`, `30` for `get_home_timeline`
+- **start_time**:
+  - For `get_users_tweets`: automatically added from `last_run_getUsersTweets.json` if available
+  - For `get_home_timeline`: computed from `--post-age-within` hours (default 48 if not provided)
 
 ## Rate Limits
 
