@@ -15,7 +15,7 @@ This skill provides functionality to fetch tweets from Twitter/X using the Twitt
 Use this skill when:
 - You need to fetch recent tweets from specific Twitter users
 - You want to retrieve the authenticated user's home timeline (posts Twitter suggests)
-- You need to track tweets over time (uses last_run.json to avoid duplicates)
+- You need to track tweets over time (uses per-function last run files to avoid duplicates)
 - You want to export tweet data in JSON format for further processing
 
 ## Prerequisites
@@ -115,7 +115,7 @@ Follow the same steps above, but place the skill folder in your desired location
 **Steps:**
 1. Verify that `handles.json` exists and contains usernames
 2. Load credentials from `config/credentials.json`
-3. Check `last_run.json` for the last execution time (if exists)
+3. Check `last_run_getUsersTweets.json` for the last execution time (if exists)
 4. For each username in handles.json:
    - Initialize tweepy Client with bearer_token only
    - Build query: `from:{username}`
@@ -126,7 +126,7 @@ Follow the same steps above, but place the skill folder in your desired location
    - Call `client.search_recent_tweets()` with the parameters
    - Collect all tweets
 5. Write all collected tweets to `output_get_users_tweets.json`
-6. Update `last_run.json` with current timestamp
+6. Update `last_run_getUsersTweets.json` with current timestamp
 
 **Command:**
 ```bash
@@ -144,7 +144,7 @@ python3 twitter.py get_users_tweets
 
 **Steps:**
 1. Load credentials from `config/credentials.json`
-2. Check `last_run.json` for the last execution time (if exists)
+2. Check `last_run_getHomeTimeline.json` for the last execution time (if exists)
 3. Initialize tweepy Client with OAuth 1.0a credentials:
    - consumer_key (oauth1_consumerKey)
    - consumer_secret (oauth1_consumerSecret)
@@ -156,7 +156,7 @@ python3 twitter.py get_users_tweets
 7. If last_run_time exists, add start_time parameter
 8. Call `client.get_home_timeline()` with the parameters
 9. Write tweets to `output_get_home_timeline.json`
-10. Update `last_run.json` with current timestamp
+10. Update `last_run_getHomeTimeline.json` with current timestamp
 
 **Command:**
 ```bash
@@ -241,15 +241,19 @@ Both functions output JSON files with this structure:
 
 ## Last Run Tracking
 
-The skill automatically tracks the last execution time in `last_run.json`. This ensures:
-- Subsequent runs only fetch tweets newer than the last run
-- Avoids duplicate tweet retrieval
-- Enables incremental updates
+The skill automatically tracks the last execution time separately for each function:
+- `last_run_getUsersTweets.json` for `get_users_tweets()`
+- `last_run_getHomeTimeline.json` for `get_home_timeline()`
 
-The `last_run.json` file format:
+This ensures:
+- Subsequent runs of each function only fetch tweets newer than that function's last run
+- Avoids duplicate tweet retrieval per function
+- Enables independent incremental updates for each function
+
+Each last run file uses this format:
 ```json
 {
-  "last_run_time": "2024-01-27T12:00:00+00:00"
+  "last_run_time": "2024-01-27T12:00:00.000Z"
 }
 ```
 
