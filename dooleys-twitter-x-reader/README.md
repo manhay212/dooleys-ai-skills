@@ -88,7 +88,7 @@ This will:
 - Read usernames from `handles.json`
 - Fetch recent tweets from each user
 - Save results to `output_get_users_tweets.json`
-- Update `last_run.json` with execution timestamp
+- Update `last_run_getUsersTweets.json` with execution timestamp
 
 #### Fetch Home Timeline
 
@@ -99,7 +99,7 @@ python3 twitter.py get_home_timeline
 This will:
 - Fetch your home timeline (posts Twitter suggests)
 - Save results to `output_get_home_timeline.json`
-- Update `last_run.json` with execution timestamp
+- Update `last_run_getHomeTimeline.json` with execution timestamp
 
 ### Python Import
 
@@ -146,12 +146,16 @@ Both functions generate JSON files with the following structure:
 
 ## Last Run Tracking
 
-The skill automatically tracks execution time in `last_run.json`. This ensures:
-- Only new tweets are fetched on subsequent runs
-- Avoids duplicate data
-- Enables incremental updates
+The skill automatically tracks execution time separately for each function:
+- `last_run_getUsersTweets.json` for `get_users_tweets()`
+- `last_run_getHomeTimeline.json` for `get_home_timeline()`
 
-The `start_time` parameter is automatically added to API calls if `last_run.json` exists.
+This ensures:
+- Only new tweets are fetched on subsequent runs of each function
+- Avoids duplicate data per function
+- Enables independent incremental updates
+
+The `start_time` parameter is automatically added to API calls if the corresponding last run file exists.
 
 ## File Structure
 
@@ -167,7 +171,8 @@ dooleys-twitter-x-reader/
 │   └── credentials.json            # Your credentials (not in git)
 ├── handles.json                    # Usernames to track (create from example)
 ├── handles.json.example            # Example handles file
-├── last_run.json                   # Last execution timestamp (auto-generated)
+├── last_run_getUsersTweets.json    # Last execution timestamp for get_users_tweets (auto-generated)
+├── last_run_getHomeTimeline.json   # Last execution timestamp for get_home_timeline (auto-generated)
 ├── output_get_users_tweets.json   # Output from get_users_tweets (auto-generated)
 └── output_get_home_timeline.json  # Output from get_home_timeline (auto-generated)
 ```
@@ -191,7 +196,7 @@ Both functions use these Twitter API v2 parameters:
 - **tweet.fields**: `note_tweet` - Supports Twitter's long-form content
 - **expansions**: `referenced_tweets.id` - Includes quoted tweets, replies
 - **max_results**: `100` - Maximum tweets per request
-- **start_time**: Automatically added from `last_run.json` if available
+- **start_time**: Automatically added from the corresponding last run file if available
 
 ## Rate Limits
 
