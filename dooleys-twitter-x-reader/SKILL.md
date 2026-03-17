@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Twitter/X Reader Skill
 
-This skill provides functionality to fetch tweets from Twitter/X using the Twitter API v2. It supports two main operations:
+This skill provides functionality to fetch tweets from Twitter/X using the Twitter API v2 with direct HTTP requests. It supports two main operations:
 1. Fetching tweets from specific users (read from handles.json)
 2. Fetching the authenticated user's home timeline
 
@@ -23,7 +23,7 @@ Use this skill when:
 - Python 3.8 or higher
 - Twitter Developer Account with API access
 - Twitter API v2 credentials (Bearer Token and/or OAuth 1.0a credentials)
-- tweepy library installed
+- requests library installed
 
 ## Installation
 
@@ -117,16 +117,18 @@ Follow the same steps above, but place the skill folder in your desired location
 2. Load credentials from `config/credentials.json`
 3. Check `last_run_getUsersTweets.json` for the last execution time (if exists)
 4. For each username in handles.json:
-   - Initialize tweepy Client with bearer_token only
    - Build query: `from:{username}`
-   - Set tweet_fields: `['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text']`
-   - Set expansions: `['referenced_tweets.id']`
+   - Set tweet.fields: `note_tweet,created_at,author_id,public_metrics,text,conversation_id`
+   - Set expansions: `referenced_tweets.id`
    - Set max_results: 100
    - If last_run_time exists, add start_time parameter
-   - Call `client.search_recent_tweets()` with the parameters
-   - Collect all tweets
-5. Write all collected tweets to `output_get_users_tweets.json`
-6. Update `last_run_getUsersTweets.json` with current timestamp
+   - Call `GET https://api.x.com/2/tweets/search/recent` with Bearer token authentication
+   - Extract full text from `note_tweet.text` if available (for long-form posts)
+   - Build username map from `includes.users`
+   - Collect all tweets with full text, username, conversation_id, and URL
+5. Group tweets by `conversation_id` in the output
+6. Write grouped tweets to `output_get_users_tweets.json` (conversations object + ungrouped_tweets array)
+7. Update `last_run_getUsersTweets.json` with current timestamp
 
 **Command:**
 ```bash
@@ -135,8 +137,9 @@ python3 twitter.py get_users_tweets
 
 **Output:**
 - File: `output_get_users_tweets.json`
-- Format: JSON with timestamp, total_tweets count, and tweets array
-- Each tweet includes: id, text, created_at, author_id, username, public_metrics, referenced_tweets, url
+- Format: JSON with timestamp, total_tweets count, conversations (grouped by conversation_id), and ungrouped_tweets
+- Each tweet includes: id, text (full text from note_tweet if available), created_at, author_id, username, conversation_id, public_metrics, referenced_tweets, url
+- Tweets are grouped by conversation_id to show thread relationships
 
 ### Function 2: get_home_timeline
 
@@ -144,23 +147,23 @@ python3 twitter.py get_users_tweets
 
 **Steps:**
 1. Load credentials from `config/credentials.json`
-2. Initialize tweepy Client with OAuth 1.0a credentials:
-   - consumer_key (oauth1_consumerKey)
-   - consumer_secret (oauth1_consumerSecret)
-   - access_token (oauth1_accessToken)
-   - access_token_secret (oauth1_accessTokenSecret)
-3. Determine the time window using the `--post-age-within` argument (hours):
+2. Determine the time window using the `--post-age-within` argument (hours):
    - If provided (e.g. `--post-age-within 48`), use that many hours
    - If not provided, default to 48 hours
-4. Compute `start_time` as: `now_utc - post_age_within_hours` (in RFC3339 format)
-5. Set tweet_fields: `['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text']`
-6. Set expansions: `['referenced_tweets.id', 'author_id']`
-7. Set user_fields: `['username', 'name']`
-8. Set max_results: 30
-9. Call `client.get_home_timeline()` with the parameters (including `start_time`)
-10. For each tweet, build a map of `author_id -> username` from the `includes.users` section
-11. Construct the tweet URL as `https://x.com/{username}/status/{id}` and add it to each tweet item
-12. Write tweets to `output_get_home_timeline.json`
+3. Compute `start_time` as: `now_utc - post_age_within_hours` (in RFC3339 format)
+4. Set tweet.fields: `note_tweet,created_at,author_id,public_metrics,text,entities,conversation_id`
+5. Set expansions: `referenced_tweets.id,author_id`
+6. Set user.fields: `username,name`
+7. Set max_results: 30
+8. Call `GET https://api.x.com/2/users/me` with OAuth 1.0a to get the authenticated user ID
+9. Call `GET https://api.x.com/2/users/{id}/timelines/reverse_chronological` with OAuth 1.0a authentication and parameters (including `start_time`)
+10. For each tweet:
+    - Extract full text from `note_tweet.text` if available (for long-form posts)
+    - Build a map of `author_id -> username` from the `includes.users` section
+    - Construct the tweet URL as `https://x.com/{username}/status/{id}`
+    - Include `conversation_id` in each tweet item
+11. Group tweets by `conversation_id` in the output
+12. Write grouped tweets to `output_get_home_timeline.json` (conversations object + ungrouped_tweets array)
 
 **Command:**
 ```bash
@@ -169,8 +172,9 @@ python3 twitter.py get_home_timeline --post-age-within 48
 
 **Output:**
 - File: `output_get_home_timeline.json`
-- Format: JSON with timestamp, total_tweets count, and tweets array
-- Each tweet includes: id, text, created_at, author_id, username, public_metrics, referenced_tweets, url
+- Format: JSON with timestamp, total_tweets count, conversations (grouped by conversation_id), and ungrouped_tweets
+- Each tweet includes: id, text (full text from note_tweet if available), created_at, author_id, username, conversation_id, public_metrics, referenced_tweets, url
+- Tweets are grouped by conversation_id to show thread relationships
 
 ## Usage Examples
 
@@ -214,36 +218,64 @@ get_home_timeline()
 
 ## Output Format
 
-Both functions output JSON files with this structure:
+Both functions output JSON files with this structure, grouped by conversation_id:
 
 ```json
 {
   "timestamp": "2024-01-27T12:00:00+00:00",
   "total_tweets": 50,
-  "tweets": [
-    {
-      "id": "1234567890",
-      "text": "Tweet content here...",
-      "created_at": "2024-01-27T11:00:00+00:00",
-      "author_id": "123456",
-      "username": "someuser",
-      "url": "https://x.com/someuser/status/1234567890",
-      "public_metrics": {
-        "retweet_count": 10,
-        "like_count": 50,
-        "reply_count": 5,
-        "quote_count": 2
-      },
-      "referenced_tweets": [
+  "total_conversations": 10,
+  "conversations": {
+    "1234567890": {
+      "conversation_id": "1234567890",
+      "tweet_count": 3,
+      "tweets": [
         {
-          "type": "replied_to",
-          "id": "0987654321"
+          "id": "1234567890",
+          "text": "Full tweet text here (extracted from note_tweet if it's a long-form post)...",
+          "created_at": "2024-01-27T11:00:00+00:00",
+          "author_id": "123456",
+          "username": "someuser",
+          "conversation_id": "1234567890",
+          "url": "https://x.com/someuser/status/1234567890",
+          "public_metrics": {
+            "retweet_count": 10,
+            "like_count": 50,
+            "reply_count": 5,
+            "quote_count": 2
+          },
+          "referenced_tweets": [
+            {
+              "type": "replied_to",
+              "id": "0987654321"
+            }
+          ]
         }
       ]
+    }
+  },
+  "ungrouped_tweets": [
+    {
+      "id": "9999999999",
+      "text": "Tweet without conversation_id...",
+      "created_at": "2024-01-27T10:00:00+00:00",
+      "author_id": "789012",
+      "username": "anotheruser",
+      "conversation_id": null,
+      "url": "https://x.com/anotheruser/status/9999999999",
+      "public_metrics": {
+        "retweet_count": 0,
+        "like_count": 5
+      }
     }
   ]
 }
 ```
+
+**Key Features:**
+- **Full Text**: The `text` field contains the complete text, extracted from `note_tweet` for long-form posts (Twitter Notes)
+- **Conversation Grouping**: Tweets with the same `conversation_id` are grouped together to show thread relationships
+- **Ungrouped Tweets**: Tweets without a `conversation_id` are placed in the `ungrouped_tweets` array
 
 ## Last Run Tracking
 
@@ -251,24 +283,35 @@ The skill tracks the last execution time only for `get_users_tweets()`:
 - `last_run_getUsersTweets.json` for `get_users_tweets()`
 
 For `get_home_timeline()`, the time window is controlled explicitly via the `--post-age-within` argument:
-- Default: 48 hours (last 2 days)
-- You can override this per run (e.g. `--post-age-within 12` for last 12 hours).
+- Default: 48 hours (if not provided)
+- Example: `python3 twitter.py get_home_timeline --post-age-within 12` for last 12 hours.
 
 ## Error Handling
 
 The skill handles common errors:
 - Missing credentials file: Provides clear error message with setup instructions
 - Missing handles.json: Creates example file and warns user
-- Rate limiting: Automatically waits when rate limits are hit (tweepy handles this)
+- Rate limiting: Automatically waits when rate limits are hit
 - API errors: Logs errors and continues with next user (for get_users_tweets)
 
 ## Rate Limits
 
 Twitter API v2 has rate limits:
 - Search Recent Tweets: 180 requests per 15 minutes (per app)
-- Get Home Timeline: 15 requests per 15 minutes (per user)
+- Get Home Timeline: 180 requests per 15 minutes (per user)
 
-The skill uses `wait_on_rate_limit=True` to automatically handle rate limits.
+The skill implements automatic rate limit handling with exponential backoff.
+
+## API Endpoints Used
+
+- **get_users_tweets**: `GET https://api.x.com/2/tweets/search/recent`
+  - Authentication: Bearer Token (OAuth 2.0 App-Only)
+  - Parameters: query, tweet.fields, expansions, max_results, start_time
+
+- **get_home_timeline**: `GET https://api.x.com/2/users/{id}/timelines/reverse_chronological`
+  - Authentication: OAuth 1.0a User Context
+  - First calls `GET https://api.x.com/2/users/me` to get authenticated user ID
+  - Parameters: tweet.fields, expansions, user.fields, max_results, start_time
 
 ## Notes
 

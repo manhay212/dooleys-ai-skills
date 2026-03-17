@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
 Twitter API v2 Reader Skill
-Fetches tweets from Twitter/X using the Twitter API v2 via tweepy library.
+Fetches tweets from Twitter/X using direct HTTP requests to Twitter API v2.
 """
 
 import json
 import sys
 import logging
+import time
+import hmac
+import hashlib
+import base64
+import urllib.parse
+import uuid
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
-import tweepy
 import requests
 import os
 
@@ -24,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Constants
 CREDENTIALS_FILE = Path(__file__).parent / "config" / "credentials.json"
 HANDLES_FILE = Path(__file__).parent / "handles.json"
+BASE_URL = "https://api.x.com/2"
 
 
 def get_last_run_file(function_name: str) -> Path:
@@ -97,8 +103,6 @@ def format_rfc3339(dt: datetime) -> str:
     """
     Format datetime to RFC3339 format required by Twitter API.
     Format: yyyy-MM-dd'T'HH:mm:ss[.SSS]Z
-    Twitter requires: yyyy-MM-dd'T'HH:mm:ss[.SSS]X where X is timezone (Z or +00:00)
-    We use Z for UTC to match Twitter's preferred format.
     """
     # Ensure timezone-aware datetime (UTC)
     if dt.tzinfo is None:
@@ -107,7 +111,6 @@ def format_rfc3339(dt: datetime) -> str:
         dt = dt.astimezone(timezone.utc)
     
     # Format with milliseconds (3 digits) and Z for UTC
-    # strftime %f gives microseconds (6 digits), we take first 3 for milliseconds
     formatted = dt.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
     return formatted
 
@@ -122,6 +125,183 @@ def save_last_run(function_name: str) -> None:
         json.dump(data, f, indent=2)
     
     logger.info(f"Saved last run time for {function_name}: {current_time}")
+
+
+def generate_oauth1_header(url: str, method: str, credentials: Dict[str, str],
+                           params: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Generate OAuth 1.0a authorization header.
+    
+    Args:
+        url: The full URL of the request
+        method: HTTP method (GET, POST, etc.)
+        credentials: Dict containing oauth1 credentials
+        params: Optional query parameters
+    
+    Returns:
+        Authorization header string
+    """
+    oauth_params = {
+        'oauth_consumer_key': credentials['oauth1_consumerKey'],
+        'oauth_nonce': uuid.uuid4().hex,
+        'oauth_signature_method': 'HMAC-SHA1',
+        'oauth_timestamp': str(int(time.time())),
+        'oauth_token': credentials['oauth1_accessToken'],
+        'oauth_version': '1.0'
+    }
+    
+    # Combine all parameters for signature
+    all_params = oauth_params.copy()
+    if params:
+        all_params.update(params)
+    
+    # Create parameter string
+    encoded_params = []
+    for key in sorted(all_params.keys()):
+        value = all_params[key]
+        if isinstance(value, list):
+            # Handle list parameters (like tweet.fields)
+            value = ','.join(value)
+        encoded_params.append(f"{urllib.parse.quote(str(key), safe='')}=\"{urllib.parse.quote(str(value), safe='')}\"")
+    
+    # Create base string
+    base_url = url.split('?')[0]  # Remove query string
+    param_string = '&'.join([f"{urllib.parse.quote(str(k), safe='')}={urllib.parse.quote(str(all_params[k]), safe='')}" 
+                            for k in sorted(all_params.keys())])
+    base_string = f"{method.upper()}&{urllib.parse.quote(base_url, safe='')}&{urllib.parse.quote(param_string, safe='')}"
+    
+    # Create signing key
+    signing_key = f"{urllib.parse.quote(credentials['oauth1_consumerSecret'], safe='')}&{urllib.parse.quote(credentials['oauth1_accessTokenSecret'], safe='')}"
+    
+    # Generate signature
+    signature = hmac.new(
+        signing_key.encode('utf-8'),
+        base_string.encode('utf-8'),
+        hashlib.sha1
+    ).digest()
+    oauth_params['oauth_signature'] = base64.b64encode(signature).decode('utf-8')
+    
+    # Build header
+    auth_header = 'OAuth ' + ', '.join(
+        [
+            f'{k}="{urllib.parse.quote(str(oauth_params[k]), safe="")}"'
+            for k in [
+                'oauth_consumer_key',
+                'oauth_nonce',
+                'oauth_signature',
+                'oauth_signature_method',
+                'oauth_timestamp',
+                'oauth_token',
+                'oauth_version',
+            ]
+        ]
+    )
+    
+    return auth_header
+
+
+def make_api_request(url: str, headers: Dict[str, str], params: Optional[Dict[str, Any]] = None,
+                     max_retries: int = 3) -> Dict[str, Any]:
+    """
+    Make API request with rate limit handling and retries.
+    
+    Args:
+        url: API endpoint URL
+        headers: Request headers
+        params: Query parameters
+        max_retries: Maximum number of retries for rate limiting
+    
+    Returns:
+        JSON response as dict
+    """
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            
+            # Handle rate limiting
+            if response.status_code == 429:
+                reset_time = int(response.headers.get('x-rate-limit-reset', 0))
+                if reset_time:
+                    wait_time = max(0, reset_time - int(time.time())) + 5
+                    logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    wait_time = 60 * (attempt + 1)
+                    logger.warning(f"Rate limit hit. Waiting {wait_time} seconds...")
+                    time.sleep(wait_time)
+                    continue
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                raise
+    
+    raise Exception("Max retries exceeded")
+
+
+def build_tweet_dict(tweet: Dict[str, Any], user_map: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, Any]:
+    """
+    Build a standardized tweet dictionary from API response.
+    
+    Args:
+        tweet: Raw tweet data from API
+        user_map: Optional mapping of author_id to username
+    
+    Returns:
+        Standardized tweet dictionary
+    """
+    tweet_id = tweet.get('id')
+    author_id = tweet.get('author_id')
+    username = user_map.get(str(author_id)) if user_map and author_id else None
+    
+    # Extract full text from note_tweet if available (for long-form posts)
+    full_text = tweet.get('text', '')
+    note_tweet_obj = tweet.get('note_tweet')
+    note_tweet_text = None
+    if note_tweet_obj and isinstance(note_tweet_obj, dict):
+        note_tweet_text = note_tweet_obj.get('text')
+        if note_tweet_text:
+            full_text = note_tweet_text
+    
+    tweet_dict = {
+        'id': tweet_id,
+        'text': full_text,
+        'created_at': tweet.get('created_at'),
+        'author_id': author_id,
+        'username': username,
+        'conversation_id': tweet.get('conversation_id'),
+    }
+    
+    # Preserve note_tweet content explicitly for downstream use
+    if note_tweet_obj:
+        tweet_dict['note_tweet'] = {
+            'text': note_tweet_text or ''
+        }
+    
+    # Add public_metrics if available
+    if 'public_metrics' in tweet:
+        tweet_dict['public_metrics'] = tweet['public_metrics']
+    
+    # Add referenced tweets if available
+    if 'referenced_tweets' in tweet and tweet['referenced_tweets']:
+        tweet_dict['referenced_tweets'] = [
+            {'type': ref.get('type'), 'id': ref.get('id')} 
+            for ref in tweet['referenced_tweets']
+        ]
+    
+    # Construct tweet URL if we have a username
+    if username:
+        tweet_dict['url'] = f"https://x.com/{username}/status/{tweet_id}"
+    else:
+        tweet_dict['url'] = None
+    
+    return tweet_dict
 
 
 def get_users_tweets() -> None:
@@ -146,122 +326,93 @@ def get_users_tweets() -> None:
         function_name = 'get_users_tweets'
         last_run_time = load_last_run(function_name)
         
-        # Initialize tweepy client with bearer token only
-        client = tweepy.Client(bearer_token=bearer_token, wait_on_rate_limit=True)
-        
         all_tweets = []
         
         for username in handles:
             logger.info(f"Fetching tweets for user: {username}")
             
             try:
-                # Build query with from:username
-                query = f"from:{username}"
-                
-                # Build tweet fields
-                tweet_fields = ['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text']
-                
-                # Build expansions (include author_id so we can map to usernames)
-                expansions = ['referenced_tweets.id', 'author_id']
-
-                # Build user fields (to get the username/handle)
-                user_fields = ['username', 'name']
-                
-                # Build parameters
-                search_params = {
-                    'query': query,
-                    'tweet_fields': tweet_fields,
-                    'expansions': expansions,
-                    'user_fields': user_fields,
-                    'max_results': 100
+                # Build query parameters
+                params = {
+                    'query': f"from:{username}",
+                    'tweet.fields': ','.join(
+                        ['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text', 'conversation_id']
+                    ),
+                    # Need author_id expansion + user.fields to resolve usernames for URL construction
+                    'expansions': 'referenced_tweets.id,author_id',
+                    'user.fields': 'username,name',
+                    'max_results': 100,
                 }
                 
                 # Add start_time if last_run exists
                 if last_run_time:
-                    # Ensure start_time is in RFC3339 format
-                    # If it's already in the correct format, use it; otherwise parse and reformat
-                    try:
-                        # Try to parse the stored time and reformat to ensure RFC3339 compliance
-                        if '+' in last_run_time or last_run_time.endswith('+00:00'):
-                            # Parse and reformat to RFC3339 with Z
-                            dt = datetime.fromisoformat(last_run_time.replace('Z', '+00:00'))
-                            search_params['start_time'] = format_rfc3339(dt)
-                        else:
-                            # Already in correct format (ends with Z)
-                            search_params['start_time'] = last_run_time
-                    except Exception as e:
-                        logger.warning(f"Error parsing last_run_time, using as-is: {e}")
-                        search_params['start_time'] = last_run_time
-                    logger.info(f"Using start_time: {search_params['start_time']}")
+                    params['start_time'] = last_run_time
+                    logger.info(f"Using start_time: {last_run_time}")
                 
-                # Search for tweets
-                response = client.search_recent_tweets(**search_params)
-
-                # Build a map of author_id -> username from includes.users
+                # Make API request with Bearer token
+                headers = {
+                    'Authorization': f'Bearer {bearer_token}',
+                    'Content-Type': 'application/json'
+                }
+                
+                response_data = make_api_request(
+                    f"{BASE_URL}/tweets/search/recent",
+                    headers,
+                    params
+                )
+                
+                # Build user map from includes.users
                 user_map: Dict[str, Optional[str]] = {}
-                try:
-                    includes = getattr(response, 'includes', None)
-                    if includes and 'users' in includes:
-                        for user in includes['users']:
-                            user_id = getattr(user, 'id', None)
-                            uname = getattr(user, 'username', None)
-                            if user_id:
-                                user_map[str(user_id)] = uname
-                except Exception as e:
-                    logger.warning(f"Error building user map from includes for {username}: {e}")
+                includes = response_data.get('includes', {})
+                if 'users' in includes:
+                    for user in includes['users']:
+                        user_id = user.get('id')
+                        uname = user.get('username')
+                        if user_id:
+                            user_map[str(user_id)] = uname
                 
-                if response.data:
-                    tweets_data = []
-                    for tweet in response.data:
-                        author_id = tweet.author_id
-                        uname = user_map.get(str(author_id)) if author_id is not None else None
-
-                        tweet_dict = {
-                            'id': tweet.id,
-                            'text': tweet.text,
-                            'created_at': tweet.created_at.isoformat() if tweet.created_at else None,
-                            'author_id': author_id,
-                            'username': uname,
-                        }
-                        
-                        # Add public_metrics if available
-                        if hasattr(tweet, 'public_metrics') and tweet.public_metrics:
-                            tweet_dict['public_metrics'] = tweet.public_metrics
-                        
-                        # Add referenced tweets if available
-                        if hasattr(tweet, 'referenced_tweets') and tweet.referenced_tweets:
-                            tweet_dict['referenced_tweets'] = [
-                                {'type': ref.type, 'id': ref.id} 
-                                for ref in tweet.referenced_tweets
-                            ]
-
-                        # Construct tweet URL if we have a username
-                        if uname:
-                            tweet_dict['url'] = f"https://x.com/{uname}/status/{tweet.id}"
-                        else:
-                            tweet_dict['url'] = None
-                        
-                        tweets_data.append(tweet_dict)
+                # Process tweets
+                if 'data' in response_data:
+                    for tweet in response_data['data']:
+                        tweet_dict = build_tweet_dict(tweet, user_map)
+                        all_tweets.append(tweet_dict)
                     
-                    all_tweets.extend(tweets_data)
-                    logger.info(f"Found {len(tweets_data)} tweets for {username}")
+                    logger.info(f"Found {len(response_data['data'])} tweets for {username}")
                 else:
                     logger.info(f"No tweets found for {username}")
                     
-            except tweepy.TooManyRequests:
-                logger.error(f"Rate limit exceeded for {username}. Waiting...")
-                # tweepy will handle rate limiting automatically with wait_on_rate_limit=True
-                continue
             except Exception as e:
                 logger.error(f"Error fetching tweets for {username}: {e}")
                 continue
         
-        # Write all tweets to output file
+        # Group tweets by conversation_id
+        conversations: Dict[str, List[Dict[str, Any]]] = {}
+        ungrouped_tweets: List[Dict[str, Any]] = []
+        
+        for tweet in all_tweets:
+            conv_id = tweet.get('conversation_id')
+            if conv_id:
+                if conv_id not in conversations:
+                    conversations[conv_id] = []
+                conversations[conv_id].append(tweet)
+            else:
+                ungrouped_tweets.append(tweet)
+        
+        # Write all tweets to output file (grouped by conversation_id)
         output_file = Path(__file__).parent / "output_get_users_tweets.json"
         output_data = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'total_tweets': len(all_tweets),
-            'tweets': all_tweets
+            'total_conversations': len(conversations),
+            'conversations': {
+                conv_id: {
+                    'conversation_id': conv_id,
+                    'tweet_count': len(tweets),
+                    'tweets': tweets
+                }
+                for conv_id, tweets in conversations.items()
+            },
+            'ungrouped_tweets': ungrouped_tweets
         }
         
         with open(output_file, 'w') as f:
@@ -287,107 +438,102 @@ def get_home_timeline() -> None:
     try:
         credentials = load_credentials()
         
-        # Initialize tweepy client with OAuth 1.0a credentials
-        client = tweepy.Client(
-            consumer_key=credentials['oauth1_consumerKey'],
-            consumer_secret=credentials['oauth1_consumerSecret'],
-            access_token=credentials['oauth1_accessToken'],
-            access_token_secret=credentials['oauth1_accessTokenSecret'],
-            wait_on_rate_limit=True
-        )
-        
-        # Build tweet fields
-        # NOTE: Do NOT request organic_metrics here; it requires elevated permissions and
-        # causes "not authorized for field" errors on many accounts.
-        tweet_fields = ['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text', 'entities']
-        
-        # Build expansions (include author_id so we can get usernames)
-        expansions = ['referenced_tweets.id', 'author_id']
-
-        # Build user fields (to get the username/handle)
-        user_fields = ['username', 'name']
-        
-        # Build parameters
-        timeline_params = {
-            'tweet_fields': tweet_fields,
-            'expansions': expansions,
-            'user_fields': user_fields,
-            'max_results': 30,
-            # Be explicit: home timeline requires user context
-            'user_auth': True,
-        }
-        
-        # Compute start_time based on "post-age-within" hours (CLI arg parsing done in main())
-        # Default to 48 hours if not provided.
-        hours_within_env = os.environ.get("HOME_TIMELINE_POST_AGE_WITHIN_HOURS")  # set by main()
+        # Compute start_time based on "post-age-within" hours
+        hours_within_env = os.environ.get("HOME_TIMELINE_POST_AGE_WITHIN_HOURS")
         try:
             hours_within = int(hours_within_env) if hours_within_env is not None else 48
         except ValueError:
             logger.warning(f"Invalid HOME_TIMELINE_POST_AGE_WITHIN_HOURS='{hours_within_env}', defaulting to 48 hours")
             hours_within = 48
-
+        
         now_utc = datetime.now(timezone.utc)
         start_dt = now_utc - timedelta(hours=hours_within)
         start_time_str = format_rfc3339(start_dt)
-        timeline_params['start_time'] = start_time_str
         logger.info(f"Using start_time (now - {hours_within}h): {start_time_str}")
-
-        # Get home timeline
-        logger.info("Fetching home timeline...")
-        response = client.get_home_timeline(**timeline_params)
-
-        # Build a map of author_id -> username from includes.users
+        
+        # Build query parameters
+        params = {
+            'tweet.fields': ','.join(['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text', 'entities', 'conversation_id']),
+            'expansions': 'referenced_tweets.id,author_id',
+            'user.fields': 'username,name',
+            'start_time': start_time_str,
+            'max_results': 30
+        }
+        
+        # Make API request with OAuth 1.0a
+        # Note: The home timeline endpoint requires the authenticated user's ID
+        # We'll use /users/me first to get the user ID, then use that ID
+        
+        # First, get the authenticated user's ID using /2/users/me
+        me_headers = {
+            'Authorization': generate_oauth1_header(
+                f"{BASE_URL}/users/me",
+                'GET',
+                credentials
+            )
+        }
+        
+        me_response = make_api_request(f"{BASE_URL}/users/me", me_headers)
+        user_id = me_response['data']['id']
+        logger.info(f"Authenticated user ID: {user_id}")
+        
+        # Now fetch home timeline
+        timeline_url = f"{BASE_URL}/users/{user_id}/timelines/reverse_chronological"
+        headers = {
+            'Authorization': generate_oauth1_header(timeline_url, 'GET', credentials, params)
+        }
+        
+        response_data = make_api_request(timeline_url, headers, params)
+        
+        # Build user map from includes.users
         user_map: Dict[str, Optional[str]] = {}
-        try:
-            includes = getattr(response, 'includes', None)
-            if includes and 'users' in includes:
-                for user in includes['users']:
-                    user_id = getattr(user, 'id', None)
-                    username = getattr(user, 'username', None)
-                    if user_id:
-                        user_map[str(user_id)] = username
-        except Exception as e:
-            logger.warning(f"Error building user map from includes: {e}")
+        includes = response_data.get('includes', {})
+        if 'users' in includes:
+            for user in includes['users']:
+                user_id = user.get('id')
+                username = user.get('username')
+                if user_id:
+                    user_map[str(user_id)] = username
         
+        # Process tweets
         tweets_data = []
-        if response.data:
-            for tweet in response.data:
-                author_id = tweet.author_id
-                username = user_map.get(str(author_id)) if author_id is not None else None
-
-                tweet_dict = {
-                    'id': tweet.id,
-                    'text': tweet.text,
-                    'created_at': tweet.created_at.isoformat() if tweet.created_at else None,
-                    'author_id': author_id,
-                    'username': username,
-                }
-                
-                # Add public_metrics if available
-                if hasattr(tweet, 'public_metrics') and tweet.public_metrics:
-                    tweet_dict['public_metrics'] = tweet.public_metrics
-                
-                # Add referenced tweets if available
-                if hasattr(tweet, 'referenced_tweets') and tweet.referenced_tweets:
-                    tweet_dict['referenced_tweets'] = [
-                        {'type': ref.type, 'id': ref.id} 
-                        for ref in tweet.referenced_tweets
-                    ]
-
-                # Construct tweet URL if we have a username
-                if username:
-                    tweet_dict['url'] = f"https://x.com/{username}/status/{tweet.id}"
-                else:
-                    tweet_dict['url'] = None
-                
+        if 'data' in response_data:
+            for tweet in response_data['data']:
+                tweet_dict = build_tweet_dict(tweet, user_map)
                 tweets_data.append(tweet_dict)
+            
+            logger.info(f"Found {len(response_data['data'])} tweets in home timeline")
+        else:
+            logger.info("No tweets found in home timeline")
         
-        # Write tweets to output file
+        # Group tweets by conversation_id
+        conversations: Dict[str, List[Dict[str, Any]]] = {}
+        ungrouped_tweets: List[Dict[str, Any]] = []
+        
+        for tweet in tweets_data:
+            conv_id = tweet.get('conversation_id')
+            if conv_id:
+                if conv_id not in conversations:
+                    conversations[conv_id] = []
+                conversations[conv_id].append(tweet)
+            else:
+                ungrouped_tweets.append(tweet)
+        
+        # Write tweets to output file (grouped by conversation_id)
         output_file = Path(__file__).parent / "output_get_home_timeline.json"
         output_data = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'total_tweets': len(tweets_data),
-            'tweets': tweets_data,
+            'total_conversations': len(conversations),
+            'conversations': {
+                conv_id: {
+                    'conversation_id': conv_id,
+                    'tweet_count': len(tweets),
+                    'tweets': tweets
+                }
+                for conv_id, tweets in conversations.items()
+            },
+            'ungrouped_tweets': ungrouped_tweets
         }
         
         with open(output_file, 'w') as f:
@@ -439,50 +585,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# tweet_fields values and descriptions:
-
-# Core Metadata Fields
-# created_at: The date and time when the tweet was created (UTC).
-# author_id: The unique user ID of the person who posted the tweet.
-# conversation_id: The ID of the original tweet that started the conversation/thread, helpful for grouping replies.
-# lang: The BCP 47 language code of the tweet text (e.g., "en" for English).
-# source: The name of the application used to send the tweet (e.g., "Twitter for iPhone").
-# possibly_sensitive: A boolean value indicating if the tweet content is flagged as sensitive by Twitter.
-# withheld: Contains details if the content is withheld in certain countries due to legal restrictions. 
-
-# Engagement and Performance Fields
-# public_metrics: Returns engagement counts at the time of the request, including retweet_count, reply_count, like_count, and quote_count.
-# non_public_metrics: (Available for authenticated users, last 30 days) Private metrics such as URL clicks or detail expands.
-# organic_metrics: Metrics for organic (non-promoted) tweets.
-# promoted_metrics: Metrics for tweets that were promoted (requires user context authentication). 
-
-# Content and Structure Fields
-# attachments: Contains keys for media (images/videos) or polls attached to the tweet. Requires expansions to get full media/poll details.
-# entities: Returns detailed metadata within the text, including hashtags, mentions, URLs, and cashtags.
-# referenced_tweets: A list of tweets that this tweet refers to, such as replied_to or retweeted.
-# reply_settings: Defines who can reply to the tweet ("everyone", "mentioned_users", or "followers").
-# geo: Contains geolocation details if the user tagged a location, including place ID or coordinates.
-# note_tweet: Used for long-form tweets, providing the extended text content. 
-
-# Edit & Context Fields
-# edit_controls: Information about whether the tweet is eligible for editing, how much time is left, and how many edits remain.
-# context_annotations: Information about the topics and entities (e.g., politicians, sports teams) derived by Twitter’s AI to provide context to the tweet. 
-
-
-
-# Expansions:
-
-# Available Expansions for Tweets:
-# author_id: Returns the user object of the Tweet’s author.
-# referenced_tweets.id: Returns the full Tweet object for any Retweet, Quote, or Reply referenced.
-# attachments.media_keys: Returns media objects (images, videos, GIFs) attached to the Tweet.
-# attachments.poll_ids: Returns the full poll object if the Tweet has a poll.
-# geo.place_id: Returns a "Place" object with location details.
-# entities.mentions.username: Returns user objects for everyone mentioned in the Tweet. 
-
-
-
-# user.fields:
-# username

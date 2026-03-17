@@ -1,18 +1,18 @@
 # dooleys-twitter-x-reader
 
-A Python skill for fetching tweets from Twitter/X using the Twitter API v2. This skill provides two main functions:
+A Python skill for fetching tweets from Twitter/X using direct HTTP requests to the Twitter API v2. This skill provides two main functions:
 1. Fetch tweets from specific users (read from `handles.json`)
 2. Fetch the authenticated user's home timeline
 
 ## Features
 
-- ✅ Twitter API v2 integration using tweepy
+- ✅ Twitter API v2 integration using direct HTTP requests (no library dependencies)
 - ✅ Bearer token authentication for user tweet fetching
 - ✅ OAuth 1.0a authentication for home timeline
 - ✅ Automatic last-run tracking to avoid duplicates
-- ✅ Support for note_tweet fields (Twitter's long-form content)
+- ✅ Full support for note_tweet fields (Twitter's long-form content)
 - ✅ Referenced tweets expansion
-- ✅ Rate limit handling
+- ✅ Automatic rate limit handling with exponential backoff
 - ✅ JSON output format
 
 ## Installation
@@ -28,6 +28,8 @@ A Python skill for fetching tweets from Twitter/X using the Twitter API v2. This
 ```bash
 pip3 install -r requirements.txt
 ```
+
+Only `requests` library is required.
 
 ### Step 2: Set Up Credentials
 
@@ -99,7 +101,7 @@ python3 twitter.py get_home_timeline --post-age-within 48
 This will:
 - Fetch your home timeline (posts Twitter suggests)
 - Save results to `output_get_home_timeline.json`
- - Fetch tweets from approximately the last 48 hours (default window, configurable)
+- Fetch tweets from approximately the last 48 hours (default window, configurable)
 
 ### Python Import
 
@@ -115,36 +117,64 @@ get_home_timeline()
 
 ## Output Format
 
-Both functions generate JSON files with the following structure:
+Both functions generate JSON files grouped by conversation_id with the following structure:
 
 ```json
 {
   "timestamp": "2024-01-27T12:00:00+00:00",
   "total_tweets": 50,
-  "tweets": [
-    {
-      "id": "1234567890",
-      "text": "Tweet content...",
-      "created_at": "2024-01-27T11:00:00+00:00",
-      "author_id": "123456",
-      "username": "someuser",
-      "url": "https://x.com/someuser/status/1234567890",
-      "public_metrics": {
-        "retweet_count": 10,
-        "like_count": 50,
-        "reply_count": 5,
-        "quote_count": 2
-      },
-      "referenced_tweets": [
+  "total_conversations": 10,
+  "conversations": {
+    "1234567890": {
+      "conversation_id": "1234567890",
+      "tweet_count": 3,
+      "tweets": [
         {
-          "type": "replied_to",
-          "id": "0987654321"
+          "id": "1234567890",
+          "text": "Full tweet text (extracted from note_tweet for long-form posts)...",
+          "created_at": "2024-01-27T11:00:00+00:00",
+          "author_id": "123456",
+          "username": "someuser",
+          "conversation_id": "1234567890",
+          "url": "https://x.com/someuser/status/1234567890",
+          "public_metrics": {
+            "retweet_count": 10,
+            "like_count": 50,
+            "reply_count": 5,
+            "quote_count": 2
+          },
+          "referenced_tweets": [
+            {
+              "type": "replied_to",
+              "id": "0987654321"
+            }
+          ]
         }
       ]
+    }
+  },
+  "ungrouped_tweets": [
+    {
+      "id": "9999999999",
+      "text": "Tweet without conversation_id...",
+      "created_at": "2024-01-27T10:00:00+00:00",
+      "author_id": "789012",
+      "username": "anotheruser",
+      "conversation_id": null,
+      "url": "https://x.com/anotheruser/status/9999999999",
+      "public_metrics": {
+        "retweet_count": 0,
+        "like_count": 5
+      }
     }
   ]
 }
 ```
+
+**Key Features:**
+- **Full Text**: The `text` field contains complete text, automatically extracted from `note_tweet` for long-form posts (Twitter Notes)
+- **Conversation Grouping**: Tweets sharing the same `conversation_id` are grouped together to show thread relationships
+- **Ungrouped Tweets**: Tweets without a `conversation_id` appear in the `ungrouped_tweets` array
 
 ## Last Run Tracking
 
@@ -180,30 +210,44 @@ dooleys-twitter-x-reader/
 - Simpler authentication
 - Read-only access
 - Sufficient for fetching public tweets
+- Uses OAuth 2.0 Bearer Token
 
 ### OAuth 1.0a (get_home_timeline)
 - User context required
 - Needed for accessing home timeline
 - Requires all 4 OAuth credentials
+- Implements proper OAuth 1.0a signature generation
 
 ## API Parameters
 
 Both functions use these Twitter API v2 parameters:
 
-- **tweet.fields**: `note_tweet` - Supports Twitter's long-form content
-- **expansions**: `referenced_tweets.id` - Includes quoted tweets, replies
+- **tweet.fields**: `note_tweet,created_at,author_id,public_metrics,text,conversation_id` (and `entities` for home timeline)
+- **expansions**: `referenced_tweets.id` (and `author_id` for home timeline)
+- **user.fields**: `username,name` (home timeline only)
 - **max_results**: `100` for `get_users_tweets`, `30` for `get_home_timeline`
 - **start_time**:
   - For `get_users_tweets`: automatically added from `last_run_getUsersTweets.json` if available
   - For `get_home_timeline`: computed from `--post-age-within` hours (default 48 if not provided)
 
+## API Endpoints
+
+- **get_users_tweets**: `GET https://api.x.com/2/tweets/search/recent`
+  - Authentication: Bearer Token
+  - Parameters: query, tweet.fields, expansions, max_results, start_time
+
+- **get_home_timeline**: `GET https://api.x.com/2/users/{id}/timelines/reverse_chronological`
+  - Authentication: OAuth 1.0a User Context
+  - First calls `GET https://api.x.com/2/users/me` to get authenticated user ID
+  - Parameters: tweet.fields, expansions, user.fields, max_results, start_time
+
 ## Rate Limits
 
 Twitter API v2 rate limits:
-- **Search Recent Tweets**: 180 requests per 15 minutes (per app)
-- **Get Home Timeline**: 15 requests per 15 minutes (per user)
+- **Search Recent Tweets**: 180 requests per 15-minute window (per app)
+- **Get Home Timeline**: 180 requests per 15-minute window (per user)
 
-The skill automatically handles rate limits using `wait_on_rate_limit=True`.
+The skill implements automatic rate limit handling with exponential backoff.
 
 ## Troubleshooting
 
@@ -232,11 +276,11 @@ The skill automatically waits for rate limits. If you see rate limit messages, w
 - Verify credentials are correct
 - Check that your Twitter app has the necessary permissions
 - Regenerate tokens from Twitter Developer Portal if needed
+- For OAuth 1.0a errors, ensure all 4 OAuth credentials are correct
 
 ## Dependencies
 
-- **tweepy** (>=4.14.0): Twitter API v2 client library
-- **requests** (>=2.31.0): HTTP library (used by tweepy)
+- **requests** (>=2.31.0): HTTP library for making API calls
 
 ## Security Notes
 
@@ -254,12 +298,14 @@ This skill is part of the Custom Skills project. Use at your own risk.
 For issues or questions:
 1. Check the troubleshooting section
 2. Review Twitter API v2 documentation
-3. Check tweepy documentation: https://docs.tweepy.org/
+3. Check the code comments for implementation details
 
 ## Changelog
 
 ### Version 1.0.0
 - Initial release
+- Direct HTTP requests (no tweepy dependency)
 - Support for get_users_tweets and get_home_timeline
+- OAuth 1.0a signature implementation
 - Last run tracking
 - JSON output format
