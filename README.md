@@ -1,0 +1,152 @@
+# Custom Skills for AI Agents
+
+A modular, self-contained collection of reusable skills that extend AI agent capabilities. Each skill follows the standard SKILL.md framework and includes complete implementation, documentation, and configuration.
+
+## What Are Skills?
+
+Skills are self-contained packages that teach AI agents how to perform specific tasks. Each skill includes:
+- **SKILL.md** — Instructions the AI agent reads to understand how to use the skill
+- **Working code** — The actual implementation (Python scripts, configs, etc.)
+- **Documentation** — Human-readable setup guide (README.md)
+- **Configuration templates** — Example credentials and settings files
+
+When an AI agent detects a user request that matches a skill's description, it loads the SKILL.md, follows the instructions, and executes the task.
+
+## Available Skills
+
+| Skill | Description | Version |
+|-------|-------------|---------|
+| [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.1.0 |
+
+## Repository Structure
+
+```
+dooleys-ai-skills/
+├── README.md                        # You are here
+├── dooleys-twitter-x-reader/        # Each skill in its own folder
+│   ├── SKILL.md                     # AI agent instructions (YAML frontmatter + markdown)
+│   ├── README.md                    # Human setup guide
+│   ├── twitter.py                   # Main implementation
+│   ├── requirements.txt             # Python dependencies
+│   ├── handles.json.example         # Example configuration
+│   ├── config/
+│   │   └── credentials.example.json # Credentials template
+│   └── .gitignore
+└── dooleys-{future-skill}/          # Pattern for new skills
+```
+
+## How to Use a Skill
+
+### Option 1: With an AI Agent (Recommended)
+
+Skills are auto-discovered when placed in your agent's skills directory. The agent will load the skill when it detects a matching user request.
+
+**For Hermes Agent:**
+```bash
+# Clone this repo
+git clone https://github.com/manhay212/dooleys-ai-skills.git ~/.hermes/custom-skills
+
+# Symlink skills into the skills directory
+mkdir -p ~/.hermes/skills/dooleys
+for skill_dir in ~/.hermes/custom-skills/dooleys-*/; do
+    skill_name=$(basename "$skill_dir")
+    short_name=$(echo "$skill_name" | sed 's/^dooleys-//')
+    [ -f "$skill_dir/SKILL.md" ] && ln -sfn "$skill_dir" ~/.hermes/skills/dooleys/"$short_name"
+done
+
+# Add API keys to ~/.hermes/.env (see skill's README for required keys)
+# Reload skills in your agent chat: /reload-skills
+```
+
+**For other agents:** Check your agent's documentation for custom skills support. Most agents that support the SKILL.md framework will auto-discover skills placed in their skills directory.
+
+### Option 2: Standalone Use
+
+Each skill can be used independently without an AI agent:
+
+```bash
+cd dooleys-twitter-x-reader
+pip install -r requirements.txt
+cp config/credentials.example.json config/credentials.json
+# Edit config/credentials.json with your API keys
+python twitter.py get_users_tweets
+```
+
+### API Keys
+
+Skills that need API keys support two methods:
+
+1. **Environment variables** (preferred for agent integration):
+   ```bash
+   export SKILL_API_KEY=your_key
+   ```
+
+2. **Config file** (for standalone use):
+   ```bash
+   cp config/credentials.example.json config/credentials.json
+   # Edit with your keys
+   ```
+
+Skills check environment variables first, then fall back to config files. This ensures compatibility with both agent-based and standalone workflows.
+
+## Creating a New Skill
+
+See the [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) skill as a reference implementation.
+
+### Skill Folder Template
+
+```
+dooleys-{skill-name}/
+├── SKILL.md                    # Required: AI agent instructions
+├── README.md                   # Required: Human setup guide
+├── {implementation files}      # Your code
+├── requirements.txt            # Python dependencies (if applicable)
+├── config/
+│   └── credentials.example.json # Credentials template (if API keys needed)
+├── handles.json.example        # Example config files (if applicable)
+└── .gitignore                  # Exclude credentials and output files
+```
+
+### SKILL.md Format
+
+Every skill MUST have a valid SKILL.md with YAML frontmatter:
+
+```yaml
+---
+name: dooleys-{skill-name}
+description: Clear description of when to use this skill. This determines how agents discover it.
+version: 1.0.0
+category: dooleys
+required_environment_variables:   # Optional: list env vars the skill needs
+  - API_KEY_NAME
+---
+```
+
+### Key Principles
+
+- **Self-contained** — Each skill folder has everything needed to run
+- **No cross-dependencies** — Skills don't depend on each other
+- **Portable** — Works with any AI agent that supports SKILL.md
+- **Secure** — Credentials never committed (use `.gitignore` and `.example` files)
+- **Documented** — Both AI-readable (SKILL.md) and human-readable (README.md)
+
+## Security
+
+- **Never commit credentials** — All `credentials.json` files are in `.gitignore`
+- **Use example files** — Provide `credentials.example.json` templates
+- **Environment variables** — Preferred over config files for agent integration
+- **Rotate tokens** — If keys are exposed, revoke and regenerate from provider portals
+
+## License
+
+This project is intended for personal use. Skills may be shared and adapted freely.
+
+## Contributing
+
+1. Create a new folder following the `dooleys-{skill-name}` pattern
+2. Implement working code
+3. Write SKILL.md with clear AI agent instructions
+4. Write README.md with human setup guide
+5. Add `.gitignore` for any generated/credential files
+6. Test end-to-end
+7. Push and create a pull request
