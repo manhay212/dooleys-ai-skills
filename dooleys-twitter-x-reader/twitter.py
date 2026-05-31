@@ -42,19 +42,54 @@ def get_last_run_file(function_name: str) -> Path:
     return Path(__file__).parent / filename
 
 
+# Environment variable mapping for Hermes/agent integration
+ENV_VAR_MAP = {
+    'bearer_token': 'TWITTER_BEARER_TOKEN',
+    'oauth1_consumerKey': 'TWITTER_OAUTH_CONSUMER_KEY',
+    'oauth1_consumerSecret': 'TWITTER_OAUTH_CONSUMER_SECRET',
+    'oauth1_accessToken': 'TWITTER_OAUTH_ACCESS_TOKEN',
+    'oauth1_accessTokenSecret': 'TWITTER_OAUTH_ACCESS_TOKEN_SECRET',
+}
+
+
 def load_credentials() -> Dict[str, Any]:
-    """Load credentials from config/credentials.json file."""
+    """Load credentials from environment variables or config/credentials.json.
+    
+    Environment variables take priority (Hermes/agent integration).
+    Falls back to config/credentials.json for standalone use.
+    """
+    # Try environment variables first (Hermes .env integration)
+    env_creds = {}
+    for key, env_var in ENV_VAR_MAP.items():
+        if os.getenv(env_var):
+            env_creds[key] = os.getenv(env_var)
+    
+    if env_creds:
+        # Check all required keys are present in env
+        required_keys = list(ENV_VAR_MAP.keys())
+        missing_keys = [k for k in required_keys if not env_creds.get(k)]
+        if not missing_keys:
+            logger.info("Using credentials from environment variables")
+            return env_creds
+        else:
+            logger.warning(
+                f"Partial env vars found (missing: {missing_keys}). "
+                "Falling back to config file for completeness."
+            )
+    
+    # Fall back to config file
     if not CREDENTIALS_FILE.exists():
         raise FileNotFoundError(
             f"Credentials file not found at {CREDENTIALS_FILE}. "
-            "Please copy config/credentials.example.json to config/credentials.json and fill in your API keys."
+            "Copy config/credentials.example.json to config/credentials.json "
+            "and fill in your API keys, or set the environment variables: "
+            + ", ".join(ENV_VAR_MAP.values())
         )
     
     with open(CREDENTIALS_FILE, 'r') as f:
         credentials = json.load(f)
     
-    required_keys = ['bearer_token', 'oauth1_consumerKey', 'oauth1_consumerSecret', 
-                    'oauth1_accessToken', 'oauth1_accessTokenSecret']
+    required_keys = list(ENV_VAR_MAP.keys())
     missing_keys = [key for key in required_keys if not credentials.get(key)]
     
     if missing_keys:

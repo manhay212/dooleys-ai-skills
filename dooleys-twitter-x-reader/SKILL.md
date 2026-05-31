@@ -1,7 +1,14 @@
 ---
 name: dooleys-twitter-x-reader
 description: Fetch tweets from Twitter/X API v2. Use this skill when you need to retrieve user tweets or home timeline from Twitter. Supports fetching tweets from specific users listed in handles.json or getting the authenticated user's home timeline feed.
-version: 1.0.0
+version: 1.1.0
+category: dooleys
+required_environment_variables:
+  - TWITTER_BEARER_TOKEN
+  - TWITTER_OAUTH_CONSUMER_KEY
+  - TWITTER_OAUTH_CONSUMER_SECRET
+  - TWITTER_OAUTH_ACCESS_TOKEN
+  - TWITTER_OAUTH_ACCESS_TOKEN_SECRET
 ---
 
 # Twitter/X Reader Skill
@@ -26,6 +33,20 @@ Use this skill when:
 - requests library installed
 
 ## Installation
+
+### For Hermes Agent (Recommended)
+
+1. The skill is auto-discovered from `~/.hermes/skills/dooleys/`
+2. Add API keys to `~/.hermes/.env`:
+   ```bash
+   TWITTER_BEARER_TOKEN=your_bearer_token
+   TWITTER_OAUTH_CONSUMER_KEY=your_consumer_key
+   TWITTER_OAUTH_CONSUMER_SECRET=your_consumer_secret
+   TWITTER_OAUTH_ACCESS_TOKEN=your_access_token
+   TWITTER_OAUTH_ACCESS_TOKEN_SECRET=your_access_token_secret
+   ```
+3. Run `/reload` in chat or restart Hermes to pick up env vars
+4. The skill auto-detects env vars — no config file needed
 
 ### For OpenClaw
 
