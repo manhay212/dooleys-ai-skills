@@ -7,6 +7,8 @@ A Python skill for fetching tweets from Twitter/X using direct HTTP requests to 
 ## Features
 
 - ✅ Twitter API v2 integration using direct HTTP requests (no library dependencies)
+- ✅ Environment variable support for AI agent integration
+- ✅ Config file fallback for standalone use
 - ✅ Bearer token authentication for user tweet fetching
 - ✅ OAuth 1.0a authentication for home timeline
 - ✅ Automatic last-run tracking to avoid duplicates
@@ -33,6 +35,22 @@ Only `requests` library is required.
 
 ### Step 2: Set Up Credentials
 
+**Option A: Environment Variables (Recommended for AI Agents)**
+
+Set these environment variables — the skill checks them first:
+
+```bash
+export TWITTER_BEARER_TOKEN=your_bearer_token
+export TWITTER_OAUTH_CONSUMER_KEY=your_consumer_key
+export TWITTER_OAUTH_CONSUMER_SECRET=your_consumer_secret
+export TWITTER_OAUTH_ACCESS_TOKEN=your_access_token
+export TWITTER_OAUTH_ACCESS_TOKEN_SECRET=your_access_token_secret
+```
+
+For Hermes Agent, add these to `~/.hermes/.env` and run `/reload` in chat.
+
+**Option B: Config File (Standalone Use)**
+
 1. Copy the example credentials file:
    ```bash
    cp config/credentials.example.json config/credentials.json
@@ -49,7 +67,7 @@ Only `requests` library is required.
    }
    ```
 
-   **Getting Your Credentials:**
+**Getting Your Credentials (both methods):**
    - Visit [Twitter Developer Portal](https://developer.twitter.com/en/portal/dashboard)
    - Navigate to your Project & App
    - Go to "Keys and Tokens" tab
