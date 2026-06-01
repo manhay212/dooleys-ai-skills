@@ -45,7 +45,7 @@ Use this skill when:
    TWITTER_OAUTH_ACCESS_TOKEN=your_access_token
    TWITTER_OAUTH_ACCESS_TOKEN_SECRET=your_access_token_secret
    ```
-3. Run `/reload` in chat or restart Hermes to pick up env vars
+3. Run `/restart` in chat to restart the gateway and pick up env vars
 4. The skill auto-detects env vars — no config file needed
 
 ### For OpenClaw

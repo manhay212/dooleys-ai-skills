@@ -47,7 +47,7 @@ export TWITTER_OAUTH_ACCESS_TOKEN=your_access_token
 export TWITTER_OAUTH_ACCESS_TOKEN_SECRET=your_access_token_secret
 ```
 
-For Hermes Agent, add these to `~/.hermes/.env` and run `/reload` in chat.
+For Hermes Agent, add these to `~/.hermes/.env` and run `/restart` in chat (restarts the gateway to pick up env vars).
 
 **Option B: Config File (Standalone Use)**
 
