@@ -463,6 +463,135 @@ def get_users_tweets() -> None:
         raise
 
 
+def get_tweet_by_id(tweet_ids: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Fetch one or more tweets by their IDs using Bearer token authentication.
+    Uses the GET /2/tweets endpoint for single ID, or GET /2/tweets?ids= for multiple.
+    
+    Args:
+        tweet_ids: Single tweet ID string, or comma-separated list of IDs.
+                   If None, reads from command-line args.
+    
+    Returns:
+        Dict with tweet data (standardized), or None if not found.
+    """
+    logger.info("Starting get_tweet_by_id() function")
+    
+    try:
+        credentials = load_credentials()
+        bearer_token = credentials['bearer_token']
+        
+        if not bearer_token:
+            raise ValueError("bearer_token is required")
+        
+        if tweet_ids is None:
+            tweet_ids = os.environ.get("TWEET_IDS", "")
+        
+        if not tweet_ids:
+            raise ValueError("No tweet IDs provided")
+        
+        # Parse IDs: support comma-separated for batch lookup
+        ids_list = [tid.strip() for tid in tweet_ids.split(',') if tid.strip()]
+        
+        if not ids_list:
+            raise ValueError("No valid tweet IDs after parsing")
+        
+        # Build query parameters
+        params: Dict[str, Any] = {
+            'tweet.fields': ','.join(
+                ['note_tweet', 'created_at', 'author_id', 'public_metrics', 'text', 'conversation_id']
+            ),
+            'expansions': 'author_id,referenced_tweets.id',
+            'user.fields': 'username,name',
+        }
+        
+        headers = {
+            'Authorization': f'Bearer {bearer_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        all_tweets = []
+        
+        if len(ids_list) == 1:
+            # Single tweet: GET /2/tweets/{id}
+            tweet_id = ids_list[0]
+            url = f"{BASE_URL}/tweets/{tweet_id}"
+            logger.info(f"Fetching single tweet ID: {tweet_id}")
+            response_data = make_api_request(url, headers, params)
+            
+            # Build user map
+            user_map: Dict[str, Optional[str]] = {}
+            includes = response_data.get('includes', {})
+            if 'users' in includes:
+                for user in includes['users']:
+                    uid = user.get('id')
+                    uname = user.get('username')
+                    if uid:
+                        user_map[str(uid)] = uname
+            
+            if 'data' in response_data:
+                tweet = response_data['data']
+                tweet_dict = build_tweet_dict(tweet, user_map)
+                all_tweets.append(tweet_dict)
+                logger.info(f"Successfully fetched tweet {tweet_id}")
+            else:
+                logger.warning(f"Tweet {tweet_id} not found or no data returned")
+                error_detail = response_data.get('errors', [{}])
+                if error_detail:
+                    logger.error(f"API error: {error_detail}")
+        else:
+            # Multiple tweets: GET /2/tweets?ids=id1,id2,...
+            params['ids'] = ','.join(ids_list)
+            url = f"{BASE_URL}/tweets"
+            logger.info(f"Fetching {len(ids_list)} tweets: {ids_list}")
+            response_data = make_api_request(url, headers, params)
+            
+            # Build user map
+            user_map = {}
+            includes = response_data.get('includes', {})
+            if 'users' in includes:
+                for user in includes['users']:
+                    uid = user.get('id')
+                    uname = user.get('username')
+                    if uid:
+                        user_map[str(uid)] = uname
+            
+            if 'data' in response_data:
+                for tweet in response_data['data']:
+                    tweet_dict = build_tweet_dict(tweet, user_map)
+                    all_tweets.append(tweet_dict)
+                logger.info(f"Successfully fetched {len(all_tweets)}/{len(ids_list)} tweets")
+            else:
+                logger.warning("No tweets found for the provided IDs")
+                error_detail = response_data.get('errors', [{}])
+                if error_detail:
+                    logger.error(f"API error: {error_detail}")
+        
+        # Write output
+        function_name = 'get_tweet_by_id'
+        output_file = Path(__file__).parent / f"output_{function_name}.json"
+        
+        if len(all_tweets) == 1:
+            output_data = all_tweets[0]
+        else:
+            output_data = {
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+                'total_tweets': len(all_tweets),
+                'tweets': all_tweets
+            }
+        
+        with open(output_file, 'w') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved {len(all_tweets)} tweet(s) to {output_file}")
+        return output_data
+        
+    except Exception as e:
+        logger.error(f"Error in get_tweet_by_id(): {e}")
+        raise
+
+
+
 def get_home_timeline() -> None:
     """
     Fetch the authenticated user's home timeline (posts Twitter suggests).
@@ -588,6 +717,7 @@ def main():
         print("Available functions:")
         print("  - get_users_tweets")
         print("  - get_home_timeline [--post-age-within HOURS]")
+        print("  - get_tweet_by_id <tweet_id> [--id <tweet_id>]")
         sys.exit(1)
     
     function_name = sys.argv[1]
@@ -612,9 +742,25 @@ def main():
         # Pass value to get_home_timeline via environment (to avoid changing its signature)
         os.environ["HOME_TIMELINE_POST_AGE_WITHIN_HOURS"] = str(post_age_within_hours)
         get_home_timeline()
+    elif function_name == "get_tweet_by_id":
+        tweet_ids = None
+        if "--id" in args:
+            idx = args.index("--id")
+            if idx + 1 < len(args):
+                tweet_ids = args[idx + 1]
+            else:
+                print("Missing value for --id")
+                sys.exit(1)
+        elif len(args) >= 1:
+            tweet_ids = args[0]
+        else:
+            print("Usage: python3 twitter.py get_tweet_by_id <tweet_id> [--id <tweet_id>]")
+            print("Supports comma-separated IDs for batch: 'id1,id2,id3'")
+            sys.exit(1)
+        get_tweet_by_id(tweet_ids)
     else:
         print(f"Unknown function: {function_name}")
-        print("Available functions: get_users_tweets, get_home_timeline [--post-age-within HOURS]")
+        print("Available functions: get_users_tweets, get_home_timeline [--post-age-within HOURS], get_tweet_by_id <tweet_id>")
         sys.exit(1)
 
 

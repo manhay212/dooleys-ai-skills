@@ -1,7 +1,7 @@
 ---
 name: dooleys-twitter-x-reader
-description: Fetch tweets from Twitter/X API v2. Use this skill when you need to retrieve user tweets or home timeline from Twitter. Supports fetching tweets from specific users listed in handles.json or getting the authenticated user's home timeline feed.
-version: 1.1.0
+description: Fetch tweets from Twitter/X API v2. Use this skill when you need to retrieve user tweets or home timeline from Twitter. Supports fetching tweets from specific users listed in handles.json, getting the authenticated user's home timeline feed, or fetching specific tweets by ID (single or batch).
+version: 1.2.0
 category: dooleys
 required_environment_variables:
   - TWITTER_BEARER_TOKEN
@@ -13,15 +13,18 @@ required_environment_variables:
 
 # Twitter/X Reader Skill
 
-This skill provides functionality to fetch tweets from Twitter/X using the Twitter API v2 with direct HTTP requests. It supports two main operations:
+This skill provides functionality to fetch tweets from Twitter/X using the Twitter API v2 with direct HTTP requests. It supports three main operations:
 1. Fetching tweets from specific users (read from handles.json)
 2. Fetching the authenticated user's home timeline
+3. Fetching specific tweets by ID — single or batch (NEW in v1.2.0)
 
 ## When to Use This Skill
 
 Use this skill when:
 - You need to fetch recent tweets from specific Twitter users
 - You want to retrieve the authenticated user's home timeline (posts Twitter suggests)
+- You need to fetch a specific tweet by its ID (extracted from URL like `https://x.com/user/status/1943773395209924769`)
+- You need to batch-fetch multiple tweets by their IDs
 - You need to track tweets over time (uses per-function last run files to avoid duplicates)
 - You want to export tweet data in JSON format for further processing
 
@@ -197,6 +200,43 @@ python3 twitter.py get_home_timeline --post-age-within 48
 - Each tweet includes: id, text (full text from note_tweet if available), created_at, author_id, username, conversation_id, public_metrics, referenced_tweets, url
 - Tweets are grouped by conversation_id to show thread relationships
 
+### Function 3: get_tweet_by_id (NEW in v1.2.0)
+
+**Purpose:** Fetch one or more specific tweets by their IDs using the Bearer token. Extract the tweet ID from any X/Twitter URL: `https://x.com/{username}/status/{tweet_id}`.
+
+**Steps:**
+1. Load credentials (same as Function 1 — uses Bearer token only)
+2. Extract tweet ID(s) from the URL or input
+3. For a single ID: call `GET https://api.x.com/2/tweets/{id}` with Bearer token
+4. For multiple IDs (comma-separated): call `GET https://api.x.com/2/tweets?ids={id1},{id2},...`
+5. Set tweet.fields: `note_tweet,created_at,author_id,public_metrics,text,conversation_id`
+6. Set expansions: `referenced_tweets.id,author_id`
+7. Set user.fields: `username,name`
+8. Extract full text from `note_tweet.text` if available (for long-form posts)
+9. Build username map from `includes.users` and construct tweet URL
+10. Write output to `output_get_tweet_by_id.json`
+    - Single tweet: the tweet dict directly (keys: id, text, created_at, author_id, username, conversation_id, public_metrics, url)
+    - Batch: `{timestamp, total_tweets, tweets: [...]}`
+
+**Command:**
+```bash
+# Single tweet
+python3 twitter.py get_tweet_by_id 1943773395209924769
+
+# Multiple tweets (comma-separated)
+python3 twitter.py get_tweet_by_id "1943773395209924769,1941632996236296417"
+
+# Using --id flag
+python3 twitter.py get_tweet_by_id --id 1943773395209924769
+```
+
+**Output:**
+- File: `output_get_tweet_by_id.json`
+- Single tweet: direct dict with all tweet fields
+- Batch: JSON with timestamp, total_tweets count, and tweets array
+- Each tweet includes: id, text (full text from note_tweet if available), created_at, author_id, username, conversation_id, public_metrics, url
+- **Important:** For tweets that link to articles, the `text` field may only contain the URL — the actual content is in the linked page. The `note_tweet` field will be present if it's a long-form Twitter post.
+
 ## Usage Examples
 
 ### Example 1: Fetch tweets from specific users
@@ -228,13 +268,19 @@ cat output_get_home_timeline.json
 ### Example 3: Using in Python code
 
 ```python
-from twitter import get_users_tweets, get_home_timeline
+from twitter import get_users_tweets, get_home_timeline, get_tweet_by_id
 
 # Fetch user tweets
 get_users_tweets()
 
 # Fetch home timeline
 get_home_timeline()
+
+# Fetch specific tweet by ID
+result = get_tweet_by_id("1943773395209924769")
+
+# Batch fetch
+result = get_tweet_by_id("1943773395209924769,1941632996236296417")
 ```
 
 ## Output Format
@@ -320,6 +366,7 @@ The skill handles common errors:
 Twitter API v2 has rate limits:
 - Search Recent Tweets: 180 requests per 15 minutes (per app)
 - Get Home Timeline: 180 requests per 15 minutes (per user)
+- Get Tweet by ID: 900 requests per 15 minutes (per app)
 
 The skill implements automatic rate limit handling with exponential backoff.
 
@@ -334,11 +381,17 @@ The skill implements automatic rate limit handling with exponential backoff.
   - First calls `GET https://api.x.com/2/users/me` to get authenticated user ID
   - Parameters: tweet.fields, expansions, user.fields, max_results, start_time
 
+- **get_tweet_by_id**: `GET https://api.x.com/2/tweets/{id}` (single) or `GET https://api.x.com/2/tweets?ids={id1},{id2},...` (batch)
+  - Authentication: Bearer Token (OAuth 2.0 App-Only)
+  - Parameters: tweet.fields, expansions, user.fields
+  - 900 requests per 15 minutes (highest rate limit tier)
+
 ## Notes
 
 - **Authentication:** 
   - `get_users_tweets()` uses Bearer Token only (simpler, read-only)
   - `get_home_timeline()` requires OAuth 1.0a (user context needed)
+  - `get_tweet_by_id()` uses Bearer Token only — no user context needed, works for any public tweet
   
 - **Tweet Fields:** The skill requests `note_tweet` field to support Twitter's new long-form tweet format (Notes)
 
