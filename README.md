@@ -16,7 +16,8 @@ When an AI agent detects a user request that matches a skill's description, it l
 
 | Skill | Description | Version |
 |-------|-------------|---------|
-| [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.1.0 |
+| [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.2.0 |
+| [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
 
 ## Repository Structure
 
