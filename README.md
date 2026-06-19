@@ -17,6 +17,8 @@ When an AI agent detects a user request that matches a skill's description, it l
 | Skill | Description | Version |
 |-------|-------------|---------|
 | [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.2.0 |
+| [dooleys-threads-reader](./dooleys-threads-reader/) | Read recent posts from Threads (threads.com) accounts via Playwright browser automation (no public API) — time-windowed, config-driven, JSON output | 1.0.0 |
+| [dooleys-market-data](./dooleys-market-data/) | Market-data engine — ingests numeric time-series from free sources (FRED/Stooq/EIA/CoinGecko/Treasury/Yahoo) into SQLite | 1.0.0 |
 | [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
 
 ## Repository Structure
@@ -24,7 +26,8 @@ When an AI agent detects a user request that matches a skill's description, it l
 ```
 dooleys-ai-skills/
 ├── README.md                        # You are here
-├── dooleys-twitter-x-reader/        # Each skill in its own folder
+├── CLAUDE.md                        # Conventions for building/maintaining skills here
+├── dooleys-twitter-x-reader/        # API-based skill (HTTP)
 │   ├── SKILL.md                     # AI agent instructions (YAML frontmatter + markdown)
 │   ├── README.md                    # Human setup guide
 │   ├── twitter.py                   # Main implementation
@@ -33,8 +36,22 @@ dooleys-ai-skills/
 │   ├── config/
 │   │   └── credentials.example.json # Credentials template
 │   └── .gitignore
+├── dooleys-threads-reader/          # Browser-automation skill (Playwright, no public API)
+│   ├── SKILL.md
+│   ├── README.md
+│   ├── record.py                    # human-run: capture login session + page snapshots
+│   ├── threads_reader.py            # automation: read accounts, output JSON
+│   ├── threads_common.py            # shared logic (unit-tested)
+│   ├── tests/                       # offline unit tests
+│   ├── accounts.json.example
+│   ├── config/credentials.example.json
+│   └── .gitignore
 └── dooleys-{future-skill}/          # Pattern for new skills
 ```
+
+Skills come in two flavors: **API-based** (a public HTTP API exists — e.g. twitter-x-reader) and
+**browser-automation** (no API, drive a real browser with Playwright — e.g. threads-reader, which
+pairs a human-run `record.py` session-capturer with a headless reader).
 
 ## How to Use a Skill
 

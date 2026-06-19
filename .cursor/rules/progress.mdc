@@ -5,17 +5,14 @@ description: "Rules for tracking project progress and maintaining state across s
 
 # Project Progress Protocol
 
-- **Before starting any task:** Read `.cursor/PROGRESS.md` to understand where the last session ended.
-- **During the task:** If a significant milestone is reached or a decision is made, update `.cursor/PROGRESS.md`.
-- **After finishing a task:** Summarize the current state concisely, what was completed, and what the "Next Step" is in `.cursor/PROGRESS.md`.
-- **Never assume state:** If `.cursor/PROGRESS.md` is missing or outdated, ask the user for a status update before proceeding.
+- **Before starting:** skim `.cursor/PROGRESS.md` for where the last session ended (treat it as a
+  log, not gospel — the repo and its `CLAUDE.md` are the source of truth).
+- **After finishing a skill (or a meaningful change):** add/refresh that skill's entry in
+  `.cursor/PROGRESS.md` — what it is, status, and any follow-ups.
+- **Keep it short.** One concise block per skill; don't accumulate stale step-by-step logs.
 
-## Progress Update Format
+## Per-skill entry format
 
-When updating PROGRESS.md, include:
-- Current status and active task
-- Completed components (with checkboxes)
-- Next steps (prioritized)
-- Key decisions made
-- Blockers or issues encountered
-- Notes for next session
+- **Skill name** — one-line purpose.
+  - Status: (built / in progress / needs X)
+  - Notes: key decisions, gotchas, or follow-ups.

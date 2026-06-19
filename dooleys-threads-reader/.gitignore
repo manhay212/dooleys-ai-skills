@@ -1,0 +1,38 @@
+# Credentials and sensitive data
+config/credentials.json
+
+# Saved authenticated browser session (cookies) — NEVER commit
+storage_state.json
+
+# Scratch snapshots produced by record.py (may contain searched handles)
+recordings/
+
+# Output and run artifacts
+output_*.json
+last_run*.json
+
+# Allow example/templates through the *.json guard above
+!accounts.json.example
+!config/credentials.example.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Playwright
+.playwright-mcp/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
