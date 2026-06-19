@@ -11,7 +11,10 @@ recordings/
 output_*.json
 last_run*.json
 
-# Allow example/templates through the *.json guard above
+# Personal account lists — example only
+accounts.json
+
+# Allow example/templates through
 !accounts.json.example
 !config/credentials.example.json
 

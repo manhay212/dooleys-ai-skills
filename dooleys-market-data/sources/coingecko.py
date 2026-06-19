@@ -67,7 +67,7 @@ def _fetch_ohlcv(
     base_url = cfg.get("base_url", "https://api.coingecko.com/api/v3")
     url = (
         f"{base_url.rstrip('/')}/coins/{source_symbol}"
-        f"/market_chart?vs_currency=usd&days=max&interval=daily"
+        f"/market_chart?vs_currency=usd&days=365&interval=daily"
     )
 
     _respect_rate_limit(cfg)

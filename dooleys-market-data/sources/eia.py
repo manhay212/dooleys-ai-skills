@@ -87,9 +87,17 @@ def fetch(
     base_url = cfg.get("base_url", "https://api.eia.gov/v2")
     url = f"{base_url.rstrip('/')}/{route.strip('/')}/data/"
 
+    # Use series frequency if available, default to daily
+    freq = cfg.get("frequency", "daily")
+    # Normalize: weekly/monthly/quarterly → lowercase for EIA API
+    if freq and freq.lower() in ("weekly", "monthly", "quarterly", "annual"):
+        freq = freq.lower()
+    else:
+        freq = "daily"
+
     params: Dict[str, Any] = {
         "api_key": api_key,
-        "frequency": "daily",
+        "frequency": freq,
         "data[0]": "value",
         f"facets[series][]": source_symbol,
         "sort[0][column]": "period",

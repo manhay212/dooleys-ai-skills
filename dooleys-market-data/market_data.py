@@ -244,7 +244,7 @@ def cmd_update(args: argparse.Namespace) -> None:
                 # Only insert rows newer than last_updated
                 if last_date_obj:
                     df["_date_parsed"] = pd.to_datetime(df["date"])
-                    df = df[df["_date_parsed"] > pd.Timestamp(last_date_obj)]
+                    df = df[df["_date_parsed"] > pd.Timestamp(last_date_obj, tz="UTC")]
                     df = df.drop(columns=["_date_parsed"])
                 
                 if df.empty:
@@ -650,6 +650,24 @@ def _fetch_from_source(
     # Build adapter config: merge source config with extra series fields
     adapter_cfg = dict(source_cfg)
     adapter_cfg["series_info"] = series_info
+
+    # Propagate essential series fields to adapter config top-level
+    for key in ("table_kind", "frequency", "unit"):
+        if key in series_info and key not in adapter_cfg:
+            adapter_cfg[key] = series_info[key]
+
+    # Map catalog-specific config keys to adapter-expected keys
+    if source_name == "eia":
+        # Look up eia_route from catalog (stored as extra field, not in DB)
+        for ac_name, ac_info in catalog.get("asset_classes", {}).items():
+            if not isinstance(ac_info, dict):
+                continue
+            for cat_series in ac_info.get("series", []):
+                if cat_series.get("ticker") == series_info.get("ticker"):
+                    route = cat_series.get("eia_route")
+                    if route:
+                        adapter_cfg["route"] = route
+                    break
     
     try:
         df = adapter_mod.fetch(source_symbol, start_str, end_str, adapter_cfg)
