@@ -82,5 +82,9 @@ A folder `dooleys-{skill-name}/` that is everything an agent needs to perform on
   no-API scraping). `record.py` (session capture) + `threads_reader.py` (by account) +
   `threads_posts.py` (by post link), sharing `threads_browser.py` (session/auth) and
   `threads_common.py` (pure logic).
+- **dooleys-substack-reader** — Substack reader via Substack's public JSON API (API flavor, no
+  auth/key). `substack_reader.py` (by profile, time-windowed; expands a @handle to all its
+  publications) + `substack_posts.py` (by post URL), sharing `substack_client.py` (HTTP transport)
+  and `substack_common.py` (pure logic, unit-tested). Paid posts flagged, not faked.
 - **dooleys-market-data** — market-data ingestion engine (numbers → SQLite from free sources).
 - **dooleys-feedback-learner** — metacognitive skill extracting principles from user corrections.
