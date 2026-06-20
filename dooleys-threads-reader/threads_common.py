@@ -164,6 +164,14 @@ def load_accounts(accounts_arg: Optional[str] = None, accounts_path: Path = ACCO
 # Output assembly
 # --------------------------------------------------------------------------- #
 
+def normalize_post_metrics(post: Dict[str, Any]) -> Dict[str, Any]:
+    """In-place: keep the raw metric strings under `metrics_raw` and parse `metrics` to ints."""
+    metrics = post.get("metrics") or {}
+    post["metrics_raw"] = metrics
+    post["metrics"] = {k: parse_count(v) for k, v in metrics.items()}
+    return post
+
+
 def assemble_output(
     results: Dict[str, List[Dict[str, Any]]],
     within_hours: float,
@@ -193,86 +201,224 @@ def assemble_output(
 
 
 # --------------------------------------------------------------------------- #
-# Browser-side extraction script (shared by record.py snapshots & the reader)
+# Post-link parsing (for threads_posts.py)
 # --------------------------------------------------------------------------- #
 
-# Injected via page.evaluate(...). Takes the profile username and returns a list of
-# structured post dicts scraped from the currently-rendered DOM. Selectors are the
-# ones verified during live DOM recon (see SKILL.md "Selectors").
-POST_EXTRACTION_JS = r"""
-(profileUsername) => {
-  const norm = s => (s || '').replace(/^\/@?/, '').replace(/^@/, '').split('/')[0].trim().toLowerCase();
-  const owner = norm(profileUsername);
-  const containers = [...document.querySelectorAll('[data-pressable-container]')];
-  const seen = new Set();
-  const posts = [];
+POST_LINKS_PATH = SKILL_DIR / "post_links.json"
 
-  for (const c of containers) {
-    const permalinkEl = c.querySelector('a[href*="/post/"]');
-    if (!permalinkEl) continue;
-    const href = permalinkEl.getAttribute('href');
-    const m = href.match(/\/post\/([^\/?#]+)/);
-    if (!m) continue;
-    const id = m[1];
-    if (seen.has(id)) continue;
-    seen.add(id);
 
-    const timeEl = c.querySelector('time[datetime]');
-    const datetime = timeEl ? timeEl.getAttribute('datetime') : null;
-    const timeText = timeEl ? (timeEl.innerText || '').trim() : null;
+def parse_post_ref(value: str) -> Optional[Dict[str, str]]:
+    """Parse a Threads post reference into {author, code, url}.
 
-    const authorEl = [...c.querySelectorAll('a[href^="/@"]')]
-      .find(a => !a.getAttribute('href').includes('/post/'));
-    const author = authorEl ? norm(authorEl.getAttribute('href')) : null;
+    Accepts a full URL (`https://www.threads.com/@zuck/post/DZpPDXbCeTt?x=1`), a bare
+    path (`/@zuck/post/DZpPDXbCeTt`), or the same with `threads.net`. Returns None if no
+    `/@author/post/code` pattern is found (a code alone can't be resolved — author is
+    needed to build the URL).
+    """
+    if not value:
+        return None
+    s = value.strip()
+    m = re.search(r"/@([^/?#\s]+)/post/([^/?#\s]+)", s)
+    if not m:
+        return None
+    author, code = m.group(1).lower(), m.group(2)
+    return {"author": author, "code": code, "url": f"{THREADS_BASE}/@{author}/post/{code}"}
 
-    const metrics = {};
-    for (const label of ['Like', 'Comment', 'Repost', 'Share']) {
-      const svg = c.querySelector(`svg[aria-label="${label}"]`);
-      if (svg) {
-        const btn = svg.closest('[role="button"]') || svg.parentElement;
-        metrics[label.toLowerCase()] = btn ? (btn.innerText || '').trim() : null;
-      }
+
+def load_post_urls(
+    urls_arg: Optional[str] = None,
+    positional: Optional[List[str]] = None,
+    links_path: Path = POST_LINKS_PATH,
+) -> List[Dict[str, str]]:
+    """Resolve the post references to read, as a list of {author, code, url} dicts.
+
+    Priority: `--urls` CSV and/or positional args (combined) win; otherwise read the
+    "urls" array from post_links.json. Invalid entries are skipped; duplicates (by code)
+    are removed, order preserved.
+    """
+    raw: List[str] = []
+    if urls_arg:
+        raw.extend(urls_arg.split(","))
+    if positional:
+        raw.extend(positional)
+    if not raw and links_path.exists():
+        try:
+            data = json.loads(links_path.read_text())
+            raw = data.get("urls", []) if isinstance(data, dict) else list(data)
+        except (json.JSONDecodeError, OSError):
+            raw = []
+
+    out: List[Dict[str, str]] = []
+    seen = set()
+    for item in raw:
+        ref = parse_post_ref(str(item))
+        if ref and ref["code"] not in seen:
+            seen.add(ref["code"])
+            out.append(ref)
+    return out
+
+
+def assemble_posts_output(
+    posts: List[Dict[str, Any]],
+    requested: int,
+    errors: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """Build the final JSON document for threads_posts.py."""
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "total_requested": requested,
+        "total_fetched": len(posts),
+        "posts": posts,
+        "errors": errors or {},
     }
 
-    // Body text: dir="auto" spans that are not the timestamp, not inside a link
-    // (author/mention chrome), and not inside a metric action button.
-    const parts = [];
-    for (const el of c.querySelectorAll('[dir="auto"]')) {
-      if (el.closest('time')) continue;
-      if (el.closest('a')) continue;
-      const btn = el.closest('[role="button"]');
-      if (btn && btn.querySelector('svg[aria-label]')) continue;
-      const t = (el.innerText || '').trim();
-      if (!t) continue;
-      if (timeText && t === timeText) continue;            // the post's own timestamp chip
-      if (author && t.toLowerCase() === author) continue;  // a bare author handle line
-      parts.push(t);
+
+# --------------------------------------------------------------------------- #
+# Browser-side extraction scripts
+# --------------------------------------------------------------------------- #
+#
+# Two entry points share one container parser:
+#   POST_EXTRACTION_JS      -> profile feeds (record.py snapshots & threads_reader.py)
+#   POST_PAGE_EXTRACTION_JS -> a single post's permalink page (threads_posts.py)
+# Selectors verified during live DOM recon (see SKILL.md "Selectors").
+
+# Shared fragment: defines parsePost(container, ownerNorm) -> post dict (or null).
+# Prepended to each entry-point function below.
+_CONTAINER_PARSER_JS = r"""
+const norm = s => (s || '').replace(/^\/@?/, '').replace(/^@/, '').split('/')[0].trim().toLowerCase();
+
+function extractLinks(c) {
+  // External links render as l.threads.com redirects with the real URL in ?u=.
+  const out = [];
+  for (const a of c.querySelectorAll('a[href]')) {
+    let href = a.getAttribute('href');
+    if (!href || href.startsWith('/') || href.startsWith('#')) continue;
+    if (href.includes('l.threads.com') || href.includes('l.instagram.com')) {
+      try {
+        const u = new URL(href).searchParams.get('u');
+        if (u) href = decodeURIComponent(u);
+      } catch (e) { /* keep original */ }
     }
-    const text = [...new Set(parts)].join('\n').trim();
-
-    const firstLines = (c.innerText || '').split('\n').slice(0, 3);
-    const repostBanner = firstLines.some(l => /reposted|pinned/i.test(l));
-    const is_repost = !!repostBanner || (!!author && !!owner && author !== owner);
-
-    const media = [];
-    if (c.querySelector('video')) media.push('video');
-    if (c.querySelector('img[src*="cdninstagram"], img[src*="fbcdn"]')) media.push('image');
-
-    const truncated = [...c.querySelectorAll('[role="button"], span, div')]
-      .some(e => /^(…\s*)?more$/i.test((e.innerText || '').trim()));
-
-    posts.push({
-      id,
-      url: location.origin + href,
-      author,
-      datetime,
-      is_repost,
-      text,
-      metrics,
-      media,
-      truncated,
-    });
+    if (!/^https?:\/\//i.test(href)) continue;
+    try {
+      const host = new URL(href).hostname;
+      if (host.endsWith('threads.com') || host.endsWith('threads.net')) continue;
+    } catch (e) { continue; }
+    out.push(href);
   }
-  return posts;
+  return [...new Set(out)];
+}
+
+function parsePost(c, ownerNorm) {
+  const permalinkEl = c.querySelector('a[href*="/post/"]');
+  if (!permalinkEl) return null;
+  const href = permalinkEl.getAttribute('href');
+  const m = href.match(/\/post\/([^\/?#]+)/);
+  if (!m) return null;
+  const id = m[1];
+
+  const timeEl = c.querySelector('time[datetime]');
+  const datetime = timeEl ? timeEl.getAttribute('datetime') : null;
+  const timeText = timeEl ? (timeEl.innerText || '').trim() : null;
+
+  const authorEl = [...c.querySelectorAll('a[href^="/@"]')]
+    .find(a => !a.getAttribute('href').includes('/post/'));
+  const author = authorEl ? norm(authorEl.getAttribute('href')) : null;
+
+  const metrics = {};
+  for (const label of ['Like', 'Comment', 'Repost', 'Share']) {
+    const svg = c.querySelector(`svg[aria-label="${label}"]`);
+    if (svg) {
+      const btn = svg.closest('[role="button"]') || svg.parentElement;
+      metrics[label.toLowerCase()] = btn ? (btn.innerText || '').trim() : null;
+    }
+  }
+
+  // Body text: dir="auto" spans that are not the timestamp, not inside a link
+  // (author/mention chrome), and not inside a metric action button.
+  const parts = [];
+  for (const el of c.querySelectorAll('[dir="auto"]')) {
+    if (el.closest('time')) continue;
+    if (el.closest('a')) continue;
+    const btn = el.closest('[role="button"]');
+    if (btn && btn.querySelector('svg[aria-label]')) continue;
+    const t = (el.innerText || '').trim();
+    if (!t) continue;
+    if (timeText && t === timeText) continue;            // the post's own timestamp chip
+    if (author && t.toLowerCase() === author) continue;  // a bare author handle line
+    parts.push(t);
+  }
+  const text = [...new Set(parts)].join('\n').trim();
+
+  const firstLines = (c.innerText || '').split('\n').slice(0, 3);
+  const repostBanner = firstLines.some(l => /reposted|pinned/i.test(l));
+  const is_repost = !!repostBanner || (!!author && !!ownerNorm && author !== ownerNorm);
+
+  const media = [];
+  if (c.querySelector('video')) media.push('video');
+  if (c.querySelector('img[src*="cdninstagram"], img[src*="fbcdn"]')) media.push('image');
+
+  const truncated = [...c.querySelectorAll('[role="button"], span, div')]
+    .some(e => /^(…\s*)?more$/i.test((e.innerText || '').trim()));
+
+  return {
+    id,
+    url: location.origin + href,
+    author,
+    datetime,
+    is_repost,
+    text,
+    links: extractLinks(c),
+    metrics,
+    media,
+    truncated,
+  };
 }
 """
+
+# Each entry point is a single arrow-function EXPRESSION (Playwright evaluates a string
+# as an expression and calls it with the single argument passed to page.evaluate). The
+# shared parser declarations live inside each function body.
+
+# Profile-feed extraction: arg = profile username; returns a deduped list of posts.
+POST_EXTRACTION_JS = "(profileUsername) => {\n" + _CONTAINER_PARSER_JS + r"""
+  const owner = norm(profileUsername);
+  const seen = new Set();
+  const posts = [];
+  for (const c of document.querySelectorAll('[data-pressable-container]')) {
+    const p = parsePost(c, owner);
+    if (!p || seen.has(p.id)) continue;
+    seen.add(p.id);
+    posts.push(p);
+  }
+  return posts;
+}"""
+
+# Permalink-page extraction: arg = {focusCode, focusAuthor}; classifies every post on the
+# page into the focused post, the author's own thread continuation, and replies.
+POST_PAGE_EXTRACTION_JS = "(arg) => {\n" + _CONTAINER_PARSER_JS + r"""
+  const focusCode = arg.focusCode;
+  const owner = norm(arg.focusAuthor || '');
+  const seen = new Set();
+  let focus = null;
+  const thread = [];
+  const replies = [];
+  for (const c of document.querySelectorAll('[data-pressable-container]')) {
+    const p = parsePost(c, owner);
+    if (!p || seen.has(p.id)) continue;
+    seen.add(p.id);
+    if (focusCode && p.id === focusCode) {
+      focus = p;
+    } else if (owner && p.author === owner) {
+      thread.push(p);                 // author's own connected continuation
+    } else {
+      replies.push(p);
+    }
+  }
+  // Fallback: if the focused post wasn't matched by code, take the first container.
+  if (!focus) {
+    const first = document.querySelector('[data-pressable-container]');
+    if (first) focus = parsePost(first, owner);
+  }
+  return { focus, thread, replies };
+}"""

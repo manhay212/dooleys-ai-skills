@@ -41,91 +41,13 @@ except ImportError:
         "  python -m playwright install chromium"
     )
 
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-)
-
-
-class SessionError(RuntimeError):
-    """Raised when we cannot establish an authenticated session."""
-
-
-# --------------------------------------------------------------------------- #
-# Auth
-# --------------------------------------------------------------------------- #
-
-def _is_logged_in(page) -> bool:
-    """Logged-out pages render the username login input; logged-in ones don't."""
-    try:
-        return page.locator('input[autocomplete="username"]').count() == 0
-    except Exception:
-        return False
-
-
-def _attempt_login(page, creds: dict) -> None:
-    """Best-effort headless re-login. Raises SessionError on challenge/failure."""
-    if not creds.get("username") or not creds.get("password"):
-        raise SessionError(
-            "Saved session is invalid/expired and no credentials are available to re-login.\n"
-            "Fix: run `python3 record.py` to log in by hand and refresh storage_state.json,\n"
-            "or set THREADS_USERNAME / THREADS_PASSWORD (in ~/.hermes/.env or config/credentials.json)."
-        )
-
-    page.goto(tc.LOGIN_URL, wait_until="domcontentloaded")
-    try:
-        page.fill('input[autocomplete="username"]', creds["username"], timeout=15000)
-        page.fill('input[autocomplete="current-password"]', creds["password"], timeout=15000)
-        # The visible submit is a button labelled "Log in".
-        page.get_by_role("button", name="Log in").first.click(timeout=15000)
-    except PWTimeout as e:
-        raise SessionError(f"Login form did not behave as expected: {e}")
-
-    page.wait_for_timeout(6000)
-
-    # Detect a 2FA / security checkpoint: still logged out but no longer the plain form,
-    # or the URL moved to a challenge page.
-    url = page.url.lower()
-    if any(k in url for k in ("challenge", "checkpoint", "two_factor", "2fa")):
-        raise SessionError(
-            "Threads presented a 2FA/security checkpoint that automation cannot clear.\n"
-            "Fix: run `python3 record.py`, clear the challenge by hand, and it will save a fresh session."
-        )
-    if not _is_logged_in(page):
-        raise SessionError(
-            "Login did not succeed (still logged out). Credentials may be wrong, or a challenge appeared.\n"
-            "Fix: run `python3 record.py` to log in by hand."
-        )
-
-
-def _ensure_session(context, page, creds: dict) -> None:
-    page.goto(tc.THREADS_BASE, wait_until="domcontentloaded")
-    page.wait_for_timeout(2500)
-    if _is_logged_in(page):
-        return
-    print("  session not active -> attempting re-login from credentials...")
-    _attempt_login(page, creds)
-    # Persist the refreshed session so subsequent runs reuse it.
-    try:
-        context.storage_state(path=str(tc.STORAGE_STATE_PATH))
-        print("  re-login OK; refreshed storage_state.json")
-    except Exception:
-        pass
+import threads_browser as tb
+from threads_browser import SessionError  # re-exported for callers/back-compat
 
 
 # --------------------------------------------------------------------------- #
 # Navigation + scraping
 # --------------------------------------------------------------------------- #
-
-def _wait_for_feed(page, timeout: int = 15000) -> None:
-    """Wait for the JS-rendered post feed to appear. Tolerant: accounts with zero posts
-    simply time out, which the caller handles."""
-    try:
-        page.wait_for_selector("[data-pressable-container]", timeout=timeout)
-    except PWTimeout:
-        pass
-    page.wait_for_timeout(1500)  # let a few more posts hydrate
-
 
 def _open_profile(page, username: str, nav_mode: str) -> None:
     """Land on the account's profile. Honors Search-first, with direct-URL fallback."""
@@ -139,13 +61,13 @@ def _open_profile(page, username: str, nav_mode: str) -> None:
             if link.count() > 0:
                 link.click(timeout=8000)
                 page.wait_for_url(f"**/@{username}**", timeout=10000)
-                _wait_for_feed(page)
+                tb.wait_for_feed(page)
                 return
         except PWTimeout:
             pass  # fall through to direct navigation
 
     page.goto(profile_url, wait_until="domcontentloaded")
-    _wait_for_feed(page)
+    tb.wait_for_feed(page)
 
 
 def _scrape_profile(page, username: str, cutoff, max_scrolls: int) -> list:
@@ -168,12 +90,7 @@ def _scrape_profile(page, username: str, cutoff, max_scrolls: int) -> list:
                 # past the window for this account.
                 reached_old = True
                 continue
-            # Normalize metric strings to ints alongside the raw values.
-            metrics = post.get("metrics") or {}
-            post["metrics"] = {
-                k: tc.parse_count(v) for k, v in metrics.items()
-            }
-            post["metrics_raw"] = metrics
+            tc.normalize_post_metrics(post)  # raw strings -> ints (+ metrics_raw)
             collected[pid] = post
 
         if reached_old:
@@ -206,31 +123,19 @@ def read_accounts(usernames, within_hours, headed, nav_mode, max_scrolls):
     results: dict = {}
     errors: dict = {}
 
-    if not tc.STORAGE_STATE_PATH.exists() and not (creds["username"] and creds["password"]):
-        raise SessionError(
-            "No saved session (storage_state.json) and no credentials found.\n"
-            "Fix: run `python3 record.py` to log in once and capture a session,\n"
-            "or set THREADS_USERNAME / THREADS_PASSWORD."
-        )
-
-    storage_arg = str(tc.STORAGE_STATE_PATH) if tc.STORAGE_STATE_PATH.exists() else None
+    tb.require_auth_material()  # raises SessionError if nothing to authenticate with
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=not headed)
-        context = browser.new_context(
-            storage_state=storage_arg,
-            viewport={"width": 1280, "height": 1600},
-            user_agent=USER_AGENT,
-        )
+        browser, context = tb.new_context(p, headed=headed)
         page = context.new_page()
 
-        _ensure_session(context, page, creds)  # raises SessionError on failure
+        tb.ensure_session(context, page, creds)  # raises SessionError on failure
 
         for username in usernames:
             print(f"  reading @{username} ...")
             try:
                 _open_profile(page, username, nav_mode)
-                if not _is_logged_in(page) and page.locator('[data-pressable-container]').count() == 0:
+                if not tb.is_logged_in(page) and page.locator('[data-pressable-container]').count() == 0:
                     errors[username] = "no posts found / profile not accessible"
                     results[username] = []
                     continue

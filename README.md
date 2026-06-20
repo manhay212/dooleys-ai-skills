@@ -17,7 +17,7 @@ When an AI agent detects a user request that matches a skill's description, it l
 | Skill | Description | Version |
 |-------|-------------|---------|
 | [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.2.0 |
-| [dooleys-threads-reader](./dooleys-threads-reader/) | Read recent posts from Threads (threads.com) accounts via Playwright browser automation (no public API) — time-windowed, config-driven, JSON output | 1.0.0 |
+| [dooleys-threads-reader](./dooleys-threads-reader/) | Read Threads (threads.com) posts via Playwright browser automation (no public API) — by account (time-windowed) or by post link (full text + thread + replies), JSON output | 1.1.0 |
 | [dooleys-market-data](./dooleys-market-data/) | Market-data engine — ingests numeric time-series from free sources (FRED/Stooq/EIA/CoinGecko/Treasury/Yahoo) into SQLite | 1.0.0 |
 | [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
 
@@ -40,10 +40,13 @@ dooleys-ai-skills/
 │   ├── SKILL.md
 │   ├── README.md
 │   ├── record.py                    # human-run: capture login session + page snapshots
-│   ├── threads_reader.py            # automation: read accounts, output JSON
-│   ├── threads_common.py            # shared logic (unit-tested)
+│   ├── threads_reader.py            # automation: read accounts by username, output JSON
+│   ├── threads_posts.py             # automation: read posts by link, output JSON
+│   ├── threads_browser.py           # shared session/auth helpers
+│   ├── threads_common.py            # shared pure logic (unit-tested)
 │   ├── tests/                       # offline unit tests
 │   ├── accounts.json.example
+│   ├── post_links.json.example
 │   ├── config/credentials.example.json
 │   └── .gitignore
 └── dooleys-{future-skill}/          # Pattern for new skills
@@ -51,7 +54,7 @@ dooleys-ai-skills/
 
 Skills come in two flavors: **API-based** (a public HTTP API exists — e.g. twitter-x-reader) and
 **browser-automation** (no API, drive a real browser with Playwright — e.g. threads-reader, which
-pairs a human-run `record.py` session-capturer with a headless reader).
+pairs a human-run `record.py` session-capturer with headless readers that work by account or by link).
 
 ## How to Use a Skill
 

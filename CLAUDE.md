@@ -28,10 +28,11 @@ A folder `dooleys-{skill-name}/` that is everything an agent needs to perform on
    `requests` calls, no SDK).
 2. **Browser-automation** — *no* public API; drive a real browser with **Playwright**. Reference:
    `dooleys-threads-reader`. Pattern: a human-run **`record.py`** captures a login session
-   (`storage_state.json`) + page snapshots for selector authoring, and a headless reader reuses
+   (`storage_state.json`) + page snapshots for selector authoring, and headless readers reuse
    that session. Prefer **reusing a saved session** over logging in every run (avoids bot
    detection / 2FA loops); fall back to credential re-login, and **abort cleanly on a 2FA/
-   checkpoint** rather than looping.
+   checkpoint** rather than looping. Split the Playwright session/auth layer
+   (`threads_browser.py`) from pure logic (`threads_common.py`) so the latter stays unit-testable.
 
 ## Non-negotiable conventions
 
@@ -78,6 +79,8 @@ A folder `dooleys-{skill-name}/` that is everything an agent needs to perform on
 
 - **dooleys-twitter-x-reader** — Twitter/X API v2 reader (API flavor; the reference for HTTP skills).
 - **dooleys-threads-reader** — Threads reader via Playwright (browser flavor; the reference for
-  no-API scraping; `record.py` + `threads_reader.py`).
+  no-API scraping). `record.py` (session capture) + `threads_reader.py` (by account) +
+  `threads_posts.py` (by post link), sharing `threads_browser.py` (session/auth) and
+  `threads_common.py` (pure logic).
 - **dooleys-market-data** — market-data ingestion engine (numbers → SQLite from free sources).
 - **dooleys-feedback-learner** — metacognitive skill extracting principles from user corrections.

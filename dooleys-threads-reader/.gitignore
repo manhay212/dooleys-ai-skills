@@ -7,15 +7,18 @@ storage_state.json
 # Scratch snapshots produced by record.py (may contain searched handles)
 recordings/
 
+# Personal config (your tracked accounts / post links) — keep out of the public repo.
+# The *.example templates are committed; the real files are not.
+accounts.json
+post_links.json
+
 # Output and run artifacts
 output_*.json
 last_run*.json
 
-# Personal account lists — example only
-accounts.json
-
-# Allow example/templates through
+# Keep example/templates tracked (explicit, in case a broad *.json ignore is ever added)
 !accounts.json.example
+!post_links.json.example
 !config/credentials.example.json
 
 # Python

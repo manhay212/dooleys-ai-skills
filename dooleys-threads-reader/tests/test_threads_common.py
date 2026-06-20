@@ -96,6 +96,70 @@ def test_load_credentials_empty_when_nothing():
     assert creds == {"username": None, "password": None}
 
 
+def test_parse_post_ref():
+    r = tc.parse_post_ref("https://www.threads.com/@Zuck/post/DZpPDXbCeTt?si=1")
+    assert r == {"author": "zuck", "code": "DZpPDXbCeTt",
+                 "url": "https://www.threads.com/@zuck/post/DZpPDXbCeTt"}
+    r2 = tc.parse_post_ref("/@mosseri/post/ABC123")
+    assert r2["author"] == "mosseri" and r2["code"] == "ABC123"
+    # threads.net host also accepted
+    assert tc.parse_post_ref("https://www.threads.net/@a/post/XYZ")["code"] == "XYZ"
+    # no post pattern -> None (a bare code can't be resolved without an author)
+    assert tc.parse_post_ref("https://www.threads.com/@zuck") is None
+    assert tc.parse_post_ref("DZpPDXbCeTt") is None
+    assert tc.parse_post_ref("") is None
+
+
+def test_load_post_urls_priority_and_dedup():
+    refs = tc.load_post_urls(
+        urls_arg="https://www.threads.com/@zuck/post/AAA,https://www.threads.com/@x/post/BBB",
+        positional=["https://www.threads.com/@zuck/post/AAA", "garbage"],
+    )
+    codes = [r["code"] for r in refs]
+    assert codes == ["AAA", "BBB"]  # dedup by code, invalid 'garbage' dropped
+
+
+def test_load_post_urls_from_file():
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "post_links.json"
+        p.write_text(json.dumps({"urls": ["https://www.threads.com/@zuck/post/CCC"]}))
+        refs = tc.load_post_urls(None, None, links_path=p)
+        assert len(refs) == 1 and refs[0]["code"] == "CCC"
+
+
+def test_load_post_urls_empty():
+    assert tc.load_post_urls(None, None, links_path=Path("/nonexistent/post_links.json")) == []
+
+
+def test_normalize_post_metrics():
+    post = {"id": "X", "metrics": {"like": "17.6K", "comment": "846", "repost": None}}
+    tc.normalize_post_metrics(post)
+    assert post["metrics"] == {"like": 17600, "comment": 846, "repost": None}
+    assert post["metrics_raw"] == {"like": "17.6K", "comment": "846", "repost": None}
+
+
+def test_assemble_posts_output_shape():
+    out = tc.assemble_posts_output(
+        [{"id": "X", "text": "hi", "thread": [], "replies": []}],
+        requested=2,
+        errors={"u": "boom"},
+    )
+    assert out["total_requested"] == 2
+    assert out["total_fetched"] == 1
+    assert out["posts"][0]["id"] == "X"
+    assert out["errors"] == {"u": "boom"}
+    assert "timestamp" in out
+
+
+def test_extraction_js_are_single_expressions():
+    # Each must be a single arrow-function expression (Playwright requirement): starts with '('
+    # and contains the shared parser + no stray top-level 'return'/'arguments'.
+    for js in (tc.POST_EXTRACTION_JS, tc.POST_PAGE_EXTRACTION_JS):
+        assert js.lstrip().startswith("("), "extraction JS must be an arrow-function expression"
+        assert "function parsePost" in js
+        assert "arguments[" not in js  # we pass a single arg / object, not arguments
+
+
 def test_assemble_output_shape():
     cutoff = datetime(2026, 6, 17, 12, 0, tzinfo=timezone.utc)
     results = {

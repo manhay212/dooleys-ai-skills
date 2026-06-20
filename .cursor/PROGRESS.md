@@ -9,14 +9,17 @@ One concise block per skill. Source of truth is the repo + root `CLAUDE.md`; thi
   - Notes: API flavor; direct `requests` (no SDK); env-first creds; reference for HTTP skills.
 
 - **dooleys-threads-reader** — Threads (threads.com) reader via Playwright (no public API).
-  - Status: built (v1.0.0), 2026-06-19.
-  - Notes: Browser flavor. Two scripts — `record.py` (human-run: captures `storage_state.json`
-    session + page snapshots) and `threads_reader.py` (headless: search each account in
-    `accounts.json`, scrape originals+reposts within `--within-hours`, output JSON). Shared logic
-    in `threads_common.py` (unit-tested, 11 tests). Selectors verified via live DOM recon and
-    documented in `SKILL.md`. Auth = saved session + `.env` re-login fallback, aborts on 2FA.
-    Tested: unit tests, no-session error path, live smoke scrape of a public profile.
-    Reference for no-API browser-automation skills.
+  - Status: built v1.0.0 (2026-06-19); v1.1.0 by-link reader added (2026-06-20).
+  - Notes: Browser flavor. Scripts — `record.py` (human-run: captures `storage_state.json` session
+    + page snapshots), `threads_reader.py` (headless: search each account in `accounts.json`,
+    scrape originals+reposts within `--within-hours`), and `threads_posts.py` (headless: read
+    specific posts by link — full untruncated text + author thread + optional `--with-replies`).
+    Shared: `threads_browser.py` (session/auth), `threads_common.py` (pure logic, 18 unit tests).
+    Auth = saved session + `.env` re-login fallback; hardened logged-in check (login-link signal)
+    so expiry triggers re-login; aborts on 2FA. Adds `links` (decoded `l.threads.com` redirects)
+    per post. Selectors verified via live DOM recon, documented in `SKILL.md`. Tested: unit,
+    no-session error path, live smoke (profile + by-link), and authenticated end-to-end (both
+    readers). Reference for no-API browser-automation skills.
 
 - **dooleys-market-data** — market-data ingestion engine (numbers → SQLite from free sources).
   - Status: built.
