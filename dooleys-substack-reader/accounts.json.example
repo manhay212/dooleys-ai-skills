@@ -1,0 +1,7 @@
+{
+  "_comment": "Substack profiles to monitor. Each entry is either a substack @handle (reads ALL of that profile's publications) or a specific <subdomain>.substack.com publication. Accepted forms: 'cryptohayes', '@cryptohayes', 'https://substack.com/@cryptohayes', 'capitalcycle.substack.com'.",
+  "accounts": [
+    "cryptohayes",
+    "marcusjin"
+  ]
+}

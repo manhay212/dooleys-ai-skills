@@ -18,6 +18,7 @@ When an AI agent detects a user request that matches a skill's description, it l
 |-------|-------------|---------|
 | [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.2.0 |
 | [dooleys-threads-reader](./dooleys-threads-reader/) | Read Threads (threads.com) posts via Playwright browser automation (no public API) — by account (time-windowed) or by post link (full text + thread + replies), JSON output | 1.1.0 |
+| [dooleys-substack-reader](./dooleys-substack-reader/) | Read Substack newsletter posts via Substack's public JSON API (no login/key) — by profile (time-windowed, expands a handle to all its publications) or by post URL (full text as Markdown), JSON output | 1.0.0 |
 | [dooleys-market-data](./dooleys-market-data/) | Market-data engine — ingests numeric time-series from free sources (FRED/Stooq/EIA/CoinGecko/Treasury/Yahoo) into SQLite | 1.0.0 |
 | [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
 
@@ -49,12 +50,25 @@ dooleys-ai-skills/
 │   ├── post_links.json.example
 │   ├── config/credentials.example.json
 │   └── .gitignore
+├── dooleys-substack-reader/         # API-based skill (Substack public JSON API, no auth)
+│   ├── SKILL.md
+│   ├── README.md
+│   ├── substack_reader.py           # read profiles within a time window, output JSON
+│   ├── substack_posts.py            # read specific posts by URL, output JSON
+│   ├── substack_client.py           # HTTP transport (the only networked module)
+│   ├── substack_common.py           # shared pure logic (unit-tested)
+│   ├── tests/                       # offline unit tests
+│   ├── accounts.json.example
+│   ├── post_links.json.example
+│   ├── requirements.txt
+│   └── .gitignore
 └── dooleys-{future-skill}/          # Pattern for new skills
 ```
 
-Skills come in two flavors: **API-based** (a public HTTP API exists — e.g. twitter-x-reader) and
-**browser-automation** (no API, drive a real browser with Playwright — e.g. threads-reader, which
-pairs a human-run `record.py` session-capturer with headless readers that work by account or by link).
+Skills come in two flavors: **API-based** (a public HTTP API exists — e.g. twitter-x-reader, and
+substack-reader which uses Substack's unauthenticated JSON API) and **browser-automation** (no API,
+drive a real browser with Playwright — e.g. threads-reader, which pairs a human-run `record.py`
+session-capturer with headless readers that work by account or by link).
 
 ## How to Use a Skill
 

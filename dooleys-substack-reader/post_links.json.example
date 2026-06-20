@@ -1,0 +1,6 @@
+{
+  "_comment": "Optional: specific Substack post URLs for substack_posts.py (used only when no URLs are passed on the command line). Each must be a full post permalink: https://<subdomain>.substack.com/p/<slug>.",
+  "urls": [
+    "https://cryptohayes.substack.com/p/reality-test"
+  ]
+}

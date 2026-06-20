@@ -1,0 +1,31 @@
+# Personal config (your tracked accounts / post links) — keep the public repo clean.
+# The *.example templates are committed; the real files are not.
+accounts.json
+post_links.json
+
+# Output and run artifacts
+output_*.json
+last_run*.json
+
+# Keep example/templates tracked (explicit, in case a broad *.json ignore is ever added)
+!accounts.json.example
+!post_links.json.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
