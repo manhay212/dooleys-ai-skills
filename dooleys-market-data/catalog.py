@@ -58,6 +58,32 @@ def load_sources(sources_path: Optional[Path] = None) -> Dict[str, Any]:
     return sources
 
 
+def iter_catalog_series(catalog: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Public accessor: the flattened list of series dicts from the catalog
+    (each with its parent asset_class injected). Loads the catalog if not given.
+    """
+    if catalog is None:
+        catalog = load_catalog()
+    return _flatten_catalog(catalog)
+
+
+def staleness_grace_map(catalog: Optional[Dict[str, Any]] = None) -> Dict[str, int]:
+    """Map of ticker -> staleness_grace_days override (for known-laggy feeds),
+    read from the catalog. Empty if none defined."""
+    out: Dict[str, int] = {}
+    try:
+        for entry in iter_catalog_series(catalog):
+            g = entry.get("staleness_grace_days")
+            if g is not None:
+                try:
+                    out[entry["ticker"]] = int(g)
+                except (ValueError, TypeError):
+                    pass
+    except Exception as exc:  # noqa: BLE001 — best-effort; doctor must not crash
+        logger.warning("Could not read staleness grace overrides: %s", exc)
+    return out
+
+
 def _flatten_catalog(catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Flatten the nested catalog structure into a list of series dicts.

@@ -86,5 +86,10 @@ A folder `dooleys-{skill-name}/` that is everything an agent needs to perform on
   auth/key). `substack_reader.py` (by profile, time-windowed; expands a @handle to all its
   publications) + `substack_posts.py` (by post URL), sharing `substack_client.py` (HTTP transport)
   and `substack_common.py` (pure logic, unit-tested). Paid posts flagged, not faked.
-- **dooleys-market-data** — market-data ingestion engine (numbers → SQLite from free sources).
+- **dooleys-market-data** — market-data engine (numbers → SQLite from free sources: FRED, Yahoo,
+  EIA, CoinGecko, Treasury). `market_data.py` CLI with a one-shot `daily` routine (update all →
+  write UPDATE_LOG.md → export snapshot) and compact read queries (`stats`/`ratio`/`spread`/
+  `dashboard`). Health check classifies by last-fetch-result (ok/late/broken), not naive date age.
+  `health.py` + `summarize.py` pure logic are unit-tested. Catalog/data live in `$MARKET_DATA_DIR`
+  (outside this repo), not here.
 - **dooleys-feedback-learner** — metacognitive skill extracting principles from user corrections.

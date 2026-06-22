@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
-test_*.py
+.pytest_cache/
+
+# Local data / scratch — never commit the DB or generated output
 *.db
 *.db-wal
 *.db-shm
+output_*.json
+exports/
+tmp.env
+.env

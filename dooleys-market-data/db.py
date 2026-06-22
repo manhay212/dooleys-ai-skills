@@ -263,6 +263,26 @@ def log_ingest(
     return cur.lastrowid or 0
 
 
+def get_last_ingest(
+    conn: sqlite3.Connection, series_id: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Return the most recent ingest_runs row for a series as a dict
+    {status, ts, rows_added, error}, or None if the series has no ingest history.
+
+    This is the authoritative "did our last fetch reach the source?" signal used
+    by the health/doctor logic — far more reliable than days-since-latest-data.
+    """
+    row = conn.execute(
+        "SELECT status, ts, rows_added, error FROM ingest_runs "
+        "WHERE series_id = ? ORDER BY run_id DESC LIMIT 1",
+        (series_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _row_to_dict(row)
+
+
 def get_latest_date(
     conn: sqlite3.Connection, series_id: int, table_kind: str
 ) -> Optional[date]:

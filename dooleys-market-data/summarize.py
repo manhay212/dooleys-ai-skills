@@ -422,6 +422,86 @@ def ratio(
     return result
 
 
+def spread(
+    conn: "sqlite3.Connection",  # type: ignore[name-defined] # noqa: F821
+    a_ticker: str,
+    b_ticker: str,
+    windows: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Compute the spread (a - b) between two series, aligned on common dates.
+
+    Unlike `ratio` (a / b), this is a difference — the right shape for rate
+    spreads like 2Y - Fed Funds (Hayes' "market demanding hikes" signal),
+    10Y - 2Y, breakeven gaps, etc.
+
+    Returns:
+        {a_ticker, b_ticker, current_spread, latest_date, a_name, b_name,
+         changes: {window: absolute_change}, percentile, z_score, unit}
+    """
+    if windows is None:
+        windows = DEFAULT_WINDOWS
+
+    a_rows = get_series(conn, ticker=a_ticker, status="%")
+    b_rows = get_series(conn, ticker=b_ticker, status="%")
+
+    if not a_rows:
+        return {"error": f"Series '{a_ticker}' not found"}
+    if not b_rows:
+        return {"error": f"Series '{b_ticker}' not found"}
+
+    a_ts = _load_series_data(conn, a_rows[0])
+    b_ts = _load_series_data(conn, b_rows[0])
+
+    if a_ts.empty:
+        return {"error": f"No data for '{a_ticker}'"}
+    if b_ts.empty:
+        return {"error": f"No data for '{b_ticker}'"}
+
+    common_idx = a_ts.index.intersection(b_ts.index)
+    if len(common_idx) < 2:
+        return {"error": "Insufficient overlapping dates for spread calculation"}
+
+    spread_series = (a_ts.loc[common_idx] - b_ts.loc[common_idx]).dropna()
+    if spread_series.empty:
+        return {"error": "Spread series is empty after alignment"}
+
+    latest_date = spread_series.index[-1]
+    current_spread = round(float(spread_series.iloc[-1]), 6)
+
+    result: Dict[str, Any] = {
+        "a_ticker": a_ticker,
+        "b_ticker": b_ticker,
+        "a_name": a_rows[0]["name"],
+        "b_name": b_rows[0]["name"],
+        "current_spread": current_spread,
+        "unit": a_rows[0].get("unit"),
+        "latest_date": latest_date.strftime("%Y-%m-%d") if hasattr(latest_date, "strftime") else str(latest_date)[:10],
+    }
+
+    # Absolute change over each window (a spread of rates is already in the unit;
+    # report the change in level, not a percentage of a possibly-near-zero base).
+    changes: Dict[str, Optional[float]] = {}
+    for window in windows:
+        days = _resolve_window_days(window)
+        cutoff = spread_series.index[-1] - pd.Timedelta(days=days)
+        past_vals = spread_series[spread_series.index <= cutoff]
+        if past_vals.empty:
+            changes[window] = None
+        else:
+            changes[window] = round(float(current_spread - past_vals.iloc[-1]), 6)
+    result["changes"] = changes
+
+    if len(spread_series) >= 2:
+        percentile = (spread_series < current_spread).sum() / len(spread_series) * 100
+        result["percentile"] = round(float(percentile), 2)
+    if len(spread_series) >= 2 and spread_series.std() > 0:
+        z = (current_spread - spread_series.mean()) / spread_series.std()
+        result["z_score"] = round(float(z), 4)
+
+    return result
+
+
 def dashboard(
     conn: "sqlite3.Connection",  # type: ignore[name-defined] # noqa: F821
     groups: List[str],

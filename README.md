@@ -19,7 +19,7 @@ When an AI agent detects a user request that matches a skill's description, it l
 | [dooleys-twitter-x-reader](./dooleys-twitter-x-reader/) | Fetch tweets from Twitter/X API v2 — user timelines and home feed | 1.2.0 |
 | [dooleys-threads-reader](./dooleys-threads-reader/) | Read Threads (threads.com) posts via Playwright browser automation (no public API) — by account (time-windowed) or by post link (full text + thread + replies), JSON output | 1.1.0 |
 | [dooleys-substack-reader](./dooleys-substack-reader/) | Read Substack newsletter posts via Substack's public JSON API (no login/key) — by profile (time-windowed, expands a handle to all its publications) or by post URL (full text as Markdown), JSON output | 1.0.0 |
-| [dooleys-market-data](./dooleys-market-data/) | Market-data engine — ingests numeric time-series from free sources (FRED/Stooq/EIA/CoinGecko/Treasury/Yahoo) into SQLite | 1.0.0 |
+| [dooleys-market-data](./dooleys-market-data/) | Market-data engine — backfills/updates numeric time-series from free sources (FRED/Yahoo/EIA/CoinGecko/Treasury) into SQLite and returns compact computed summaries (stats/ratio/spread/dashboard). One-shot `daily` routine writes a trustworthy UPDATE_LOG; fetch-result-based health check | 1.3.0 |
 | [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
 
 ## Repository Structure
@@ -62,6 +62,20 @@ dooleys-ai-skills/
 │   ├── post_links.json.example
 │   ├── requirements.txt
 │   └── .gitignore
+├── dooleys-market-data/             # API-based engine (FRED/Yahoo/EIA/CoinGecko/Treasury → SQLite)
+│   ├── SKILL.md
+│   ├── README.md                    # setup + corrected cron wrapper + testing walkthrough
+│   ├── market_data.py               # CLI: init/sync-catalog/backfill/update/daily/query/doctor/export
+│   ├── db.py                        # SQLite schema init, UPSERTs, query primitives
+│   ├── catalog.py                   # load/validate catalog.yaml + sources.yaml → series table
+│   ├── summarize.py                 # compact summaries: stats / ratio / spread / dashboard
+│   ├── health.py                    # freshness classifier + UPDATE_LOG rendering (unit-tested)
+│   ├── sources/                     # one adapter per provider (fred/yahoo/eia/coingecko/treasury)
+│   ├── tests/                       # offline unit tests (health, summarize)
+│   ├── docs/                        # Phase-0 design docs (architecture/spec/plan)
+│   ├── references/source-notes.md   # per-source pitfalls + migration history
+│   ├── requirements.txt
+│   └── .gitignore                   # excludes the local .db / snapshots / secrets
 └── dooleys-{future-skill}/          # Pattern for new skills
 ```
 

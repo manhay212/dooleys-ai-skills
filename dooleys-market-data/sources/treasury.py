@@ -1,12 +1,21 @@
 """
 US Treasury FiscalData source adapter for dooleys-market-data.
 
-Fetches Treasury General Account (TGA) daily balances from the
-U.S. Treasury FiscalData API.  No API key required.
+Fetches the daily Treasury General Account (TGA) closing balance from the
+Daily Treasury Statement (DTS). No API key required.
+
+History
+-------
+The original `/v1/accounting/dts/dts_table_1` endpoint was retired by Treasury
+(now 404s). This adapter targets the current endpoint
+`/v1/accounting/dts/operating_cash_balance`, filtering to the
+"Treasury General Account (TGA) Closing Balance" row. In the new schema the
+closing balance is carried in `open_today_bal` (the legacy `close_today_bal`
+field is null), in millions of USD.
 
 Configuration (cfg dict):
-    base_url : str — API base URL
-                    (default: https://api.fiscaldata.treasury.gov/services/api/fiscal_service)
+    base_url   : str — API base URL
+                 (default: https://api.fiscaldata.treasury.gov/services/api/fiscal_service)
     rate_limit : int — max requests per minute (default 60)
 """
 
@@ -23,10 +32,13 @@ logger = logging.getLogger(__name__)
 
 _last_request_time: float = 0.0
 
+# The account_type row that carries the daily TGA closing balance.
+_TGA_CLOSING = "Treasury General Account (TGA) Closing Balance"
+
 
 def _respect_rate_limit(cfg: Dict[str, Any]) -> None:
     global _last_request_time
-    rate_limit: int = int(cfg.get("rate_limit", 60))
+    rate_limit: int = int(cfg.get("rate_limit_per_min", cfg.get("rate_limit", 60)))
     min_interval: float = max(60.0 / rate_limit, 1.0)
     elapsed = time.monotonic() - _last_request_time
     if elapsed < min_interval:
@@ -41,26 +53,22 @@ def fetch(
     cfg: Optional[Dict[str, Any]] = None,
 ) -> pd.DataFrame:
     """
-    Fetch Treasury daily statement data (TGA balance).
+    Fetch the daily TGA closing balance (millions USD).
 
     Parameters
     ----------
     source_symbol : str
-        For the default endpoint this is ignored — the adapter fetches
-        DTS Table 1 (Deposits with Federal Reserve → TGA).
-        Reserved for future multi-endpoint support.
-    start : str | None
-        ISO start date (YYYY-MM-DD).  None → earliest available.
-    end : str | None
-        ISO end date.  None → latest available.
+        Ignored — retained for interface compatibility. The endpoint and filter
+        are fixed to the TGA closing balance.
+    start, end : str | None
+        ISO dates (YYYY-MM-DD) bounding record_date.
     cfg : dict
         Adapter configuration (see module docstring).
 
     Returns
     -------
     pd.DataFrame
-        Columns: ['date', 'value'] where value is close_today_bal in millions USD.
-        Empty on failure.
+        Columns: ['value'], indexed by tz-aware UTC date. Empty on failure.
     """
     if cfg is None:
         cfg = {}
@@ -69,10 +77,9 @@ def fetch(
         "base_url",
         "https://api.fiscaldata.treasury.gov/services/api/fiscal_service",
     )
-    url = f"{base_url.rstrip('/')}/v1/accounting/dts/dts_table_1"
+    url = f"{base_url.rstrip('/')}/v1/accounting/dts/operating_cash_balance"
 
-    # Build filter string
-    filters = ["account_type:eq:Deposits%20with%20Federal%20Reserve"]
+    filters = [f"account_type:eq:{_TGA_CLOSING}"]
     if start:
         filters.append(f"record_date:gte:{start}")
     if end:
@@ -80,10 +87,11 @@ def fetch(
     filter_str = ",".join(filters)
 
     all_rows: list[dict[str, Any]] = []
-    page_number: int = 1
+    page_number = 1
 
     while True:
         params: Dict[str, Any] = {
+            "fields": "record_date,account_type,open_today_bal,close_today_bal",
             "filter": filter_str,
             "sort": "record_date",
             "page[size]": 10000,
@@ -96,28 +104,26 @@ def fetch(
             resp = requests.get(url, params=params, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as exc:
-            logger.warning(
-                "Treasury API request failed: %s", exc
-            )
+            logger.warning("Treasury API request failed: %s", exc)
             return pd.DataFrame()
 
         payload = resp.json()
         data = payload.get("data", [])
-
         if not data:
             break
 
         for row in data:
             record_date = row.get("record_date", "")
-            close_bal = row.get("close_today_bal")
-            if close_bal is not None:
-                try:
-                    close_bal = float(close_bal)
-                except (ValueError, TypeError):
-                    close_bal = None
-            all_rows.append({"date": record_date, "value": close_bal})
+            # New schema: value is in open_today_bal; fall back to close_today_bal.
+            raw = row.get("open_today_bal")
+            if raw in (None, "null", ""):
+                raw = row.get("close_today_bal")
+            try:
+                val = float(raw) if raw not in (None, "null", "") else None
+            except (ValueError, TypeError):
+                val = None
+            all_rows.append({"date": record_date, "value": val})
 
-        # Check if there are more pages
         meta = payload.get("meta", {})
         total_pages = int(meta.get("total-pages", 1))
         if page_number >= total_pages:
@@ -125,7 +131,7 @@ def fetch(
         page_number += 1
 
     if not all_rows:
-        logger.warning("Treasury: no data returned")
+        logger.warning("Treasury: no TGA closing-balance data returned")
         return pd.DataFrame()
 
     df = pd.DataFrame(all_rows)

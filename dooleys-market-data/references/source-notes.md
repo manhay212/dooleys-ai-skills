@@ -1,6 +1,28 @@
 # Source Adapter Reliability & Pitfalls
 
-Last updated: 2026-06-14 (FRED FX release lag finding, cron diagnostic pattern)
+Last updated: 2026-06-22 (v1.3.0: `daily` command + doctor redesign; pandas-3.x date-filter
+fix; Treasury TGA_DAILY restored; KOL series added)
+
+## 2026-06-22 overhaul — what changed and why
+
+- **Daily pipeline was dead since June 14.** The *cron wrapper* (`update-market-data.sh`,
+  in the hermes setup — not this skill) ran `update`, then `doctor`, then re-parsed doctor's
+  output in bash under `set -euo pipefail`; the doctor stdout was never captured, so an empty
+  var hit `json.load` and `set -e` killed the run right after "Doctor check — OK". Result:
+  `UPDATE_LOG.md`, the Parquet export, and the GitHub push silently stopped (frozen at
+  June 14) while `update` kept partially advancing the DB. **Fix:** a single robust
+  `market_data.py daily` command now owns update + log + export in Python; the wrapper is a
+  trivial 2-liner (see README). Don't reintroduce fragile bash.
+- **Silent pandas-3.x crash.** Under pandas 3.0.3 the old incremental filter
+  `df[parsed > pd.Timestamp(last, tz="UTC")]` raised `Invalid comparison between
+  datetime64[us, UTC] and Timestamp` for several FRED series (M2, COREPCE, FEDFUNDS,
+  PAYROLLS, UNRATE, M2_WEEKLY) — they had been erroring on *every* update for weeks, frozen
+  at old dates, and the old doctor mislabeled them as generic "stale". **Fix:** `_filter_after`
+  collapses both sides to tz-naive normalized calendar dates before comparing.
+- **Doctor redesign.** Freshness is now classified by the *last fetch result* (ok / late /
+  broken / no_data) plus a generous frequency-aware date bound, not a fixed day threshold.
+  This killed ~20 daily false alarms. `update` now logs `no_new_data` runs so the health
+  check can tell "current with source" from "broken". See SKILL.md for the semantics.
 
 ## FRED (Federal Reserve Economic Data)
 
@@ -17,6 +39,14 @@ Last updated: 2026-06-14 (FRED FX release lag finding, cron diagnostic pattern)
 - **FX series release lag (2026-06-14):** DEXJPUS, DEXCHUS, DEXHKUS have a ~1-week publication delay. As of any given day, the latest available observation from FRED may be 8-10 days old. When `doctor` flags these as "stale," verify by curling the FRED API directly — if the API's latest date matches the DB's latest date, the series is current and the stale flag is a false alarm.
 
 **Working tickers:** DGS2, DGS10, DGS30, DFII10, T10YIE, T10Y2Y, SOFR, FEDFUNDS, WALCL, RRP, TGA, RESERVES, M2, M2_WEEKLY, CPI, CORECPI, COREPCE, UNRATE, PAYROLLS, CLAIMS, HY_OAS, IG_OAS, NFCI, VIX, OVX, USDHKD, USDJPY, USDCNY
+
+**Added 2026-06-22 (KOL indicators):**
+- `EFFR` (Effective Fed Funds, daily) — enables Hayes' 2Y−EFFR "demanding hikes" spread (`query spread --a DGS2 --b EFFR`; >0.5 = trapped).
+- `SRF` (`WORAL`, Repo/Standing Repo Facility Wednesday level, weekly) — Hayes' "stealth printing" tell; any balance > 0.
+- `TERM_PREMIUM` (`THREEFYTP10`, Kim-Wright 10Y term premium) — ~1wk lag → `staleness_grace_days: 14`.
+- `DXY_BROAD` (`DTWEXBGS`, broad trade-weighted USD) — ~1wk lag → grace 14.
+- `NATGAS` (`DHHNGSP`, Henry Hub spot, daily) — FRED mirror of EIA; ~3-5d lag.
+- FX series `USDHKD/USDJPY/USDCNY` carry `staleness_grace_days: 14` (FRED FX publishes weekly with lag).
 
 ## Yahoo Finance (yfinance)
 
@@ -48,7 +78,14 @@ Last updated: 2026-06-14 (FRED FX release lag finding, cron diagnostic pattern)
 - **Frequency parameter:** The adapter hardcodes `frequency=daily` by default but reads `cfg.get("frequency")` if available. Weekly series (CRUDE_STOCKS, SPR) must have `frequency: weekly` in catalog.yaml or the API returns 400. The `_fetch_from_source` propagates `frequency` from `series_info` to `adapter_cfg` top-level.
 - **Data lag:** EIA data has 2-3 day publication delay. BRENT/WTI showing 3-day staleness is normal.
 
-**Working tickers:** WTI, BRENT, CRUDE_STOCKS, SPR — all 4 working
+**Working tickers:** WTI, BRENT, CRUDE_STOCKS, SPR, plus (added 2026-06-22) GASOLINE_STOCKS
+(`WGTSTUS1`), DISTILLATE_STOCKS (`WDISTUS1`), REFINERY_UTIL (`WPULEUS3`, route
+`petroleum/pnp/wiup`) — make-investment-easy weekly product data. EIA data has a 2-3 day
+publication lag; doctor treats that as `ok`, not stale.
+
+**curl tip:** EIA URLs use `[` `]` (e.g. `data[0]`, `facets[series][]`). When testing with
+`curl`, pass `-g` or curl's URL globbing mangles them. The Python adapter uses `requests`
+with a params dict and is unaffected.
 
 ## CoinGecko
 
@@ -63,13 +100,19 @@ Last updated: 2026-06-14 (FRED FX release lag finding, cron diagnostic pattern)
 
 ## US Treasury FiscalData
 
-**Reliability:** ★☆☆☆☆ — BROKEN as of 2026-06-11. TGA_DAILY paused in catalog.
+**Reliability:** ★★★★☆ — FIXED & WORKING as of 2026-06-22. TGA_DAILY un-paused.
 
-**What happened:** The `/v1/accounting/dts/dts_table_1` endpoint returns 404. Treasury restructured their API — all `dts_table_N` endpoints are gone. The replacement endpoint `/v1/accounting/dts/deposits_withdrawals_operating_cash` works (HTTP 200) but has a different schema:
-- Old schema: `close_today_bal` (closing balance, millions USD)
-- New schema: `transaction_today_amt` (daily transaction amount)
-- New endpoint requires summing transactions to compute closing balance — needs a baseline.
+**History:** The old `/v1/accounting/dts/dts_table_1` endpoint was retired (404). The adapter
+was rewritten to use `/v1/accounting/dts/operating_cash_balance`, filtering to
+`account_type = "Treasury General Account (TGA) Closing Balance"`.
 
-**Status:** TGA_DAILY marked `status: paused` in catalog.yaml with notes explaining the issue. Weekly TGA data still available via FRED (`TGA` series, ticker `WTREGEN`). Adapter rewrite needed before re-enabling.
+**Gotcha (new schema):** the closing balance is carried in the `open_today_bal` field
+(millions USD); the legacy `close_today_bal` field is `null`. The adapter reads
+`open_today_bal` and falls back to `close_today_bal`. Verified: 2026-06-17 closing = $956,502M
+= prior day's opening, so the field mapping is internally consistent. `source_symbol` in the
+catalog is `operating_cash_balance` (documentation only — the endpoint/filter are fixed).
 
-**Working tickers:** None — TGA_DAILY paused
+**Why it matters:** daily TGA + RRP gives Hayes' net-dollar-liquidity Δ. Weekly TGA also lives
+on FRED (`TGA`/`WTREGEN`) as a cross-check.
+
+**Working tickers:** TGA_DAILY (daily TGA closing balance, ~2022→present)

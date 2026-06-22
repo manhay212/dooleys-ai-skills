@@ -21,13 +21,14 @@ import pyarrow.parquet as pq
 from db import (
     get_db_path, get_market_data_dir, get_connection,
     init_db, get_series, upsert_series, upsert_ohlcv, upsert_observations,
-    get_latest_date, log_ingest, query_ohlcv, query_observations,
+    get_latest_date, get_last_ingest, log_ingest, query_ohlcv, query_observations,
     add_event, query_events, update_series_last_updated,
 )
-from catalog import load_catalog, load_sources, sync_catalog
+from catalog import load_catalog, load_sources, sync_catalog, staleness_grace_map
 from summarize import (
-    stats, latest, ratio, dashboard, query_series_data,
+    stats, latest, ratio, spread, dashboard, query_series_data,
 )
+import health
 
 logger = logging.getLogger("market_data")
 
@@ -187,10 +188,8 @@ def cmd_backfill(args: argparse.Namespace) -> None:
                     "error": str(exc),
                 })
             
-            # Rate-limit sleep
-            sleep_sec = 60.0 / rate_limit if rate_limit > 0 else 1.0
-            time.sleep(sleep_sec)
-        
+            # No core-level rate-limit sleep: each adapter rate-limits itself.
+
         _print_json({"backfill_results": results})
     finally:
         conn.close()
@@ -203,86 +202,114 @@ def cmd_update(args: argparse.Namespace) -> None:
     conn = get_connection()
     try:
         series_list = _resolve_series(conn, args)
-        
+
         if not series_list:
             logger.error("No matching series found.")
             return
-        
-        sources_config = load_sources()
-        catalog = load_catalog()
-        
-        results = []
-        for s in series_list:
-            ticker = s["ticker"]
-            sid = s["series_id"]
-            table_kind = s["table_kind"]
-            source_name = s["source"]
-            
-            # Get last_updated — incremental from there
-            last_date = s.get("last_updated")
-            if last_date:
-                last_date_obj = _parse_date_arg(str(last_date)[:10]) if last_date else None
-            else:
-                last_date_obj = None
-            
-            source_cfg = sources_config.get("sources", {}).get(source_name, {})
-            rate_limit = source_cfg.get("rate_limit_per_min", 60)
-            
-            try:
-                df, from_date, to_date = _fetch_from_source(
-                    source_name, s, source_cfg, catalog,
-                    backfill=False, since=last_date_obj,
-                )
-                
-                if df is None or df.empty:
-                    results.append({
-                        "ticker": ticker, "status": "no_new_data",
-                        "reason": "No new data available",
-                    })
-                    continue
-                
-                # Only insert rows newer than last_updated
-                if last_date_obj:
-                    df["_date_parsed"] = pd.to_datetime(df["date"])
-                    df = df[df["_date_parsed"] > pd.Timestamp(last_date_obj, tz="UTC")]
-                    df = df.drop(columns=["_date_parsed"])
-                
-                if df.empty:
-                    results.append({
-                        "ticker": ticker, "status": "no_new_data",
-                    })
-                    continue
-                
-                if table_kind == "ohlcv":
-                    rows = upsert_ohlcv(conn, sid, df)
-                else:
-                    rows = upsert_observations(conn, sid, df)
-                
-                max_date = df["date"].max()
-                update_series_last_updated(conn, sid, max_date)
-                
-                run_id = log_ingest(conn, sid, rows, from_date, to_date, "success")
-                
-                results.append({
-                    "ticker": ticker, "status": "success",
-                    "rows_added": rows,
-                    "from_date": _to_date_str(from_date),
-                    "to_date": _to_date_str(to_date),
-                    "run_id": run_id,
-                })
-                
-            except Exception as exc:
-                logger.error("Failed to update %s: %s", ticker, exc)
-                log_ingest(conn, sid, 0, None, None, "error", str(exc))
-                results.append({
-                    "ticker": ticker, "status": "error", "error": str(exc),
-                })
-            
-            time.sleep(60.0 / rate_limit if rate_limit > 0 else 1.0)
-        
+
+        per_timeout = getattr(args, "per_series_timeout", None)
+        results = _update_series_list(conn, series_list, per_series_timeout=per_timeout)
         _print_json({"update_results": results})
     finally:
         conn.close()
+
+
+# Per-series timeout so one slow/hung source can't starve the rest of the run.
+class _SeriesTimeout(Exception):
+    pass
+
+
+def _with_timeout(seconds: Optional[int], fn, *a, **k):
+    """Run fn with a hard wall-clock timeout (Unix main-thread only via SIGALRM).
+    Falls back to no timeout where SIGALRM is unavailable."""
+    import signal
+    if not seconds or not hasattr(signal, "SIGALRM"):
+        return fn(*a, **k)
+
+    def _handler(signum, frame):  # noqa: ANN001
+        raise _SeriesTimeout(f"timed out after {seconds}s")
+
+    old = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(int(seconds))
+    try:
+        return fn(*a, **k)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def _update_one(conn, s, sources_config, catalog) -> Dict[str, Any]:
+    """Incrementally update a single series. Returns a result dict; never raises."""
+    ticker = s["ticker"]
+    sid = s["series_id"]
+    table_kind = s["table_kind"]
+    source_name = s["source"]
+
+    last_date = s.get("last_updated")
+    last_date_obj = _parse_date_arg(str(last_date)[:10]) if last_date else None
+    source_cfg = sources_config.get("sources", {}).get(source_name, {})
+
+    df, from_date, to_date = _fetch_from_source(
+        source_name, s, source_cfg, catalog, backfill=False, since=last_date_obj,
+    )
+
+    if df is None or df.empty:
+        # Reached the source, nothing newer available — record it so the health
+        # check can distinguish "current with source" from "broken".
+        log_ingest(conn, sid, 0, from_date, to_date, "no_new_data")
+        return {"ticker": ticker, "status": "no_new_data", "reason": "No new data available"}
+
+    if last_date_obj:
+        df = _filter_after(df, last_date_obj)
+
+    if df.empty:
+        log_ingest(conn, sid, 0, from_date, to_date, "no_new_data")
+        return {"ticker": ticker, "status": "no_new_data"}
+
+    if table_kind == "ohlcv":
+        rows = upsert_ohlcv(conn, sid, df)
+    else:
+        rows = upsert_observations(conn, sid, df)
+
+    update_series_last_updated(conn, sid, df["date"].max())
+    run_id = log_ingest(conn, sid, rows, from_date, to_date, "success")
+    return {
+        "ticker": ticker, "status": "success", "rows_added": rows,
+        "from_date": _to_date_str(from_date), "to_date": _to_date_str(to_date),
+        "run_id": run_id,
+    }
+
+
+def _update_series_list(
+    conn, series_list: List[Dict[str, Any]], per_series_timeout: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Update each series in turn with per-series error + timeout isolation.
+
+    One failing or slow source records an error and the run continues — this is
+    what keeps the daily ingest from going all-or-nothing.
+    """
+    if per_series_timeout is None:
+        per_series_timeout = int(os.getenv("MARKET_DATA_SERIES_TIMEOUT", "60"))
+
+    sources_config = load_sources()
+    catalog = load_catalog()
+
+    results: List[Dict[str, Any]] = []
+    for s in series_list:
+        ticker = s["ticker"]
+        try:
+            result = _with_timeout(
+                per_series_timeout, _update_one, conn, s, sources_config, catalog
+            )
+        except Exception as exc:  # noqa: BLE001 — isolate every series
+            logger.error("Failed to update %s: %s", ticker, exc)
+            try:
+                log_ingest(conn, s["series_id"], 0, None, None, "error", str(exc))
+            except Exception:  # noqa: BLE001
+                pass
+            result = {"ticker": ticker, "status": "error", "error": str(exc)}
+        results.append(result)
+    return results
 
 
 def cmd_query(args: argparse.Namespace) -> None:
@@ -310,7 +337,15 @@ def cmd_query(args: argparse.Namespace) -> None:
             windows = _parse_windows(getattr(args, "windows", None))
             result = ratio(conn, args.num, args.den, windows=windows)
             _print_json(result)
-        
+
+        elif subcmd == "spread":
+            if not args.a or not args.b:
+                print("Error: --a and --b tickers required for spread", file=sys.stderr)
+                sys.exit(1)
+            windows = _parse_windows(getattr(args, "windows", None))
+            result = spread(conn, args.a, args.b, windows=windows)
+            _print_json(result)
+
         elif subcmd == "series":
             since = getattr(args, "since", None)
             until = getattr(args, "until", None)
@@ -368,66 +403,62 @@ def cmd_add_event(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _series_health(conn, today: Optional[date] = None) -> List[Dict[str, Any]]:
+    """Compute per-series freshness for every ACTIVE series.
+
+    Uses the most-recent ingest result (success / no_new_data / error) as the
+    authoritative signal, with a generous, frequency-aware date-age watch flag.
+    Returns a list of health dicts consumable by health.build_report / render.
+    """
+    if today is None:
+        today = date.today()
+
+    try:
+        grace_map = staleness_grace_map()
+    except Exception:  # noqa: BLE001
+        grace_map = {}
+
+    out: List[Dict[str, Any]] = []
+    for s in get_series(conn, status="active"):
+        sid = s["series_id"]
+        latest_date = get_latest_date(conn, sid, s["table_kind"])
+        last_ingest = get_last_ingest(conn, sid)
+        last_status = last_ingest["status"] if last_ingest else None
+        status, reason = health.classify_series_freshness(
+            frequency=s.get("frequency"),
+            latest_date=latest_date,
+            last_ingest_status=last_status,
+            today=today,
+            grace_days=grace_map.get(s["ticker"]),
+        )
+        out.append({
+            "ticker": s["ticker"],
+            "name": s["name"],
+            "asset_class": s.get("asset_class"),
+            "source": s["source"],
+            "frequency": s.get("frequency") or "daily",
+            "latest_date": latest_date,
+            "status": status,
+            "reason": reason,
+        })
+    return out
+
+
 def cmd_doctor(args: argparse.Namespace) -> None:
     """
-    Health check: for each active series, check freshness, gaps, source health.
-    Prints a report.
+    Health check. Classifies each active series as ok / late / broken / no_data
+    using the last fetch result + a calendar-aware freshness bound, and prints a
+    compact JSON report. "needs_attention" lists only genuinely-broken series.
     """
     conn = get_connection()
     try:
-        all_series = get_series(conn, status="%")
-        active = [s for s in all_series if s["status"] == "active"]
-        
-        issues: List[Dict[str, Any]] = []
-        healthy = 0
-        
-        for s in active:
-            ticker = s["ticker"]
-            sid = s["series_id"]
-            frequency = s.get("frequency") or "daily"
-            table_kind = s["table_kind"]
-            
-            latest_date = get_latest_date(conn, sid, table_kind)
-            last_updated = s.get("last_updated")
-            
-            series_issues = []
-            
-            # Check freshness
-            if latest_date:
-                expected_max_age = {
-                    "daily": 2,
-                    "weekly": 8,
-                    "monthly": 35,
-                }.get(frequency, 2)
-                
-                age = (date.today() - latest_date).days
-                if age > expected_max_age:
-                    series_issues.append(f"Stale: last data {latest_date} ({age}d ago, expected <={expected_max_age}d)")
-            else:
-                series_issues.append("No data in database")
-            
-            # Check if last_updated is set
-            if not last_updated:
-                series_issues.append("last_updated not set")
-            
-            if series_issues:
-                issues.append({
-                    "ticker": ticker,
-                    "name": s["name"],
-                    "asset_class": s.get("asset_class"),
-                    "source": s["source"],
-                    "issues": series_issues,
-                })
-            else:
-                healthy += 1
-        
-        report = {
-            "total_series": len(all_series),
-            "active": len(active),
-            "healthy": healthy,
-            "with_issues": len(issues),
-            "issues": issues,
-        }
+        series_health = _series_health(conn)
+        report = health.build_report(series_health)
+        # Serialize latest_date in the attention/watch lists for JSON output.
+        for key in ("attention_list", "watch_list"):
+            for item in report[key]:
+                ld = item.get("latest_date")
+                item["latest_date"] = ld.isoformat() if hasattr(ld, "isoformat") else (str(ld) if ld else None)
         _print_json(report)
     finally:
         conn.close()
@@ -479,42 +510,100 @@ def cmd_status(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def _export_parquet(conn) -> Path:
+    """Write a multi-table Parquet snapshot under MARKET_DATA_DIR/exports.
+    Returns the export directory. Raises on failure (caller decides what to do)."""
+    export_dir = get_market_data_dir() / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+
+    tables: Dict[str, pd.DataFrame] = {
+        "series": pd.read_sql_query("SELECT * FROM series", conn),
+        "ohlcv": pd.read_sql_query("SELECT * FROM ohlcv", conn),
+        "observations": pd.read_sql_query("SELECT * FROM observations", conn),
+        "events": pd.read_sql_query("SELECT * FROM events", conn),
+        "ingest_runs": pd.read_sql_query("SELECT * FROM ingest_runs", conn),
+    }
+
+    # series doubles as the canonical single-file snapshot for quick restore.
+    pq.write_table(pa.Table.from_pandas(tables["series"]),
+                   export_dir / "market_snapshot.parquet", compression="snappy")
+    for name, df in tables.items():
+        pq.write_table(pa.Table.from_pandas(df),
+                       export_dir / f"market_snapshot_{name}.parquet", compression="snappy")
+
+    logger.info("Exported %d tables to %s", len(tables), export_dir)
+    return export_dir
+
+
 def cmd_export(args: argparse.Namespace) -> None:
     """Export all tables to a Parquet snapshot."""
+    if hasattr(args, "format") and args.format and args.format != "parquet":
+        print(f"Unsupported format: {args.format}. Only 'parquet' supported.", file=sys.stderr)
+        sys.exit(1)
     conn = get_connection()
     try:
-        export_dir = get_market_data_dir() / "exports"
-        export_dir.mkdir(parents=True, exist_ok=True)
-        
-        export_path = export_dir / "market_snapshot.parquet"
-        
-        if hasattr(args, "format") and args.format:
-            fmt = args.format
-            if fmt != "parquet":
-                print(f"Unsupported format: {fmt}. Only 'parquet' supported.", file=sys.stderr)
-                sys.exit(1)
-        
-        # Read all tables
-        tables: Dict[str, pd.DataFrame] = {}
-        
-        tables["series"] = pd.read_sql_query("SELECT * FROM series", conn)
-        tables["ohlcv"] = pd.read_sql_query("SELECT * FROM ohlcv", conn)
-        tables["observations"] = pd.read_sql_query("SELECT * FROM observations", conn)
-        tables["events"] = pd.read_sql_query("SELECT * FROM events", conn)
-        tables["ingest_runs"] = pd.read_sql_query("SELECT * FROM ingest_runs", conn)
-        
-        # Write to Parquet with multiple tables (using directories)
-        table = pa.Table.from_pandas(tables["series"])
-        pq.write_table(table, export_path, compression="snappy")
-        
-        # For multi-table export, use a partitioned approach
-        for name, df in tables.items():
-            tbl_path = export_dir / f"market_snapshot_{name}.parquet"
-            tbl = pa.Table.from_pandas(df)
-            pq.write_table(tbl, tbl_path, compression="snappy")
-        
-        logger.info("Exported %d tables to %s", len(tables), export_dir)
+        export_dir = _export_parquet(conn)
         print(f"Exported to {export_dir}/market_snapshot_*.parquet")
+    finally:
+        conn.close()
+
+
+def cmd_daily(args: argparse.Namespace) -> None:
+    """
+    One-shot daily routine — the single command a cron/agent should call.
+
+    Robust and self-contained (no fragile shell glue):
+      1. Update every active series, with per-series error + timeout isolation.
+      2. Run the health check.
+      3. Write a clean, trustworthy UPDATE_LOG.md.
+      4. Export a Parquet snapshot (best-effort).
+      5. Print a JSON summary (with a top-level `timestamp`).
+
+    Exit code is 0 unless a series genuinely needs attention AND --strict is set.
+    """
+    conn = get_connection()
+    try:
+        active = get_series(conn, status="active")
+        update_results = _update_series_list(
+            conn, active, per_series_timeout=getattr(args, "per_series_timeout", None)
+        )
+        run_summary = {
+            "updated": sum(1 for r in update_results if r["status"] == "success"),
+            "current": sum(1 for r in update_results if r["status"] == "no_new_data"),
+            "errors": sum(1 for r in update_results if r["status"] == "error"),
+        }
+
+        series_health = _series_health(conn)
+        report = health.build_report(series_health)
+
+        ts = datetime.now().astimezone().isoformat(timespec="seconds")
+        md = health.render_update_log(report, run_summary, series_health, ts)
+        log_path = get_market_data_dir() / "UPDATE_LOG.md"
+        log_path.write_text(md)
+
+        export_error = None
+        try:
+            _export_parquet(conn)
+        except Exception as exc:  # noqa: BLE001 — snapshot is best-effort
+            export_error = str(exc)
+            logger.error("Parquet export failed: %s", exc)
+
+        summary = {
+            "timestamp": ts,
+            "run_summary": run_summary,
+            "health": {k: report[k] for k in
+                       ("total_active", "ok", "late", "broken", "no_data", "needs_attention")},
+            "needs_attention": [
+                {"ticker": s["ticker"], "source": s.get("source"), "reason": s["reason"]}
+                for s in report["attention_list"]
+            ],
+            "update_log": str(log_path),
+            "export_error": export_error,
+        }
+        _print_json(summary)
+
+        if getattr(args, "strict", False) and report["needs_attention"] > 0:
+            sys.exit(2)
     finally:
         conn.close()
 
@@ -725,6 +814,22 @@ def _parse_windows(raw: Optional[str]) -> Optional[List[str]]:
     return [w.strip() for w in raw.split(",") if w.strip()]
 
 
+def _filter_after(df: "pd.DataFrame", last_date_obj: date) -> "pd.DataFrame":
+    """Keep only rows whose calendar date is strictly after last_date_obj.
+
+    Robust under pandas 3.x: adapters may return tz-aware OR tz-naive 'date'
+    columns, and comparing the two raises. We collapse both sides to tz-naive
+    normalized calendar dates before comparing.
+    """
+    parsed = pd.to_datetime(df["date"], errors="coerce")
+    tz = getattr(parsed.dt, "tz", None)
+    if tz is not None:
+        parsed = parsed.dt.tz_localize(None)
+    cutoff = pd.Timestamp(last_date_obj).normalize()
+    mask = parsed.dt.normalize() > cutoff
+    return df[mask.fillna(False).values]
+
+
 def _to_date_str(val) -> Optional[str]:
     """Convert a date-ish value to YYYY-MM-DD string."""
     if val is None:
@@ -767,6 +872,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_up.add_argument("--ticker", help="Comma-separated tickers")
     p_up.add_argument("--asset-class", help="Asset class group name")
     p_up.add_argument("--all", action="store_true", help="Update all active series")
+    p_up.add_argument("--per-series-timeout", type=int, dest="per_series_timeout",
+                      help="Hard timeout (seconds) per series; default env MARKET_DATA_SERIES_TIMEOUT or 60")
+
+    # daily (the one-shot cron/agent routine)
+    p_daily = sub.add_parser(
+        "daily",
+        help="Update all active series, write UPDATE_LOG.md, export snapshot, print summary",
+    )
+    p_daily.add_argument("--per-series-timeout", type=int, dest="per_series_timeout",
+                         help="Hard timeout (seconds) per series; default 60")
+    p_daily.add_argument("--strict", action="store_true",
+                         help="Exit non-zero (2) if any series needs attention")
     
     # query (with sub-subcommands)
     p_query = sub.add_parser("query", help="Query the database")
@@ -787,6 +904,13 @@ def build_parser() -> argparse.ArgumentParser:
     q_ratio.add_argument("--num", required=True, help="Numerator ticker")
     q_ratio.add_argument("--den", required=True, help="Denominator ticker")
     q_ratio.add_argument("--windows", default="1d,1w,1m,3m,1y,5y",
+                          help="Comma-separated windows")
+
+    # query spread (a - b; e.g. 2Y - Fed Funds)
+    q_spread = q_sub.add_parser("spread", help="Difference between two series (a - b)")
+    q_spread.add_argument("--a", required=True, help="First ticker (minuend)")
+    q_spread.add_argument("--b", required=True, help="Second ticker (subtrahend)")
+    q_spread.add_argument("--windows", default="1d,1w,1m,3m,1y,5y",
                           help="Comma-separated windows")
     
     # query series
@@ -854,6 +978,7 @@ def main() -> None:
         "sync-catalog": cmd_sync_catalog,
         "backfill": cmd_backfill,
         "update": cmd_update,
+        "daily": cmd_daily,
         "query": cmd_query,
         "query-events": cmd_query_events,
         "add-event": cmd_add_event,
@@ -864,10 +989,25 @@ def main() -> None:
     }
     
     handler = command_map.get(args.command)
-    if handler:
-        handler(args)
-    else:
+    if not handler:
         print(f"Unknown command: {args.command}", file=sys.stderr)
+        sys.exit(1)
+
+    import sqlite3
+    try:
+        handler(args)
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            print(
+                f"Error: the market-data DB is not initialized at {get_db_path()}.\n"
+                "Run:  python3 market_data.py init  &&  python3 market_data.py sync-catalog\n"
+                "(then `backfill --all`), or set MARKET_DATA_DIR to the right location.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        raise
+    except FileNotFoundError as exc:
+        print(f"Error: required config/file missing — {exc}", file=sys.stderr)
         sys.exit(1)
 
 
