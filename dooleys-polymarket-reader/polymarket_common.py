@@ -172,3 +172,40 @@ def rank_and_cap(event_recs: list, limit: int) -> list:
     rest = [e for e in event_recs if not e.get("watchlisted")]
     rest.sort(key=lambda e: e.get("event_significance", 0.0), reverse=True)
     return pinned + rest[: max(0, limit - len(pinned))]
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load_config(path) -> dict:
+    cfg = {
+        "buckets": {k: list(v) for k, v in DEFAULT_BUCKETS.items()},
+        "horizon_cut_buckets": list(HORIZON_CUT_BUCKETS),
+        "thresholds": dict(DEFAULT_THRESHOLDS),
+        "weights": dict(DEFAULT_WEIGHTS),
+    }
+    if not path:
+        return cfg
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            user = json.load(fh)
+    except (FileNotFoundError, ValueError):
+        return cfg
+    if isinstance(user.get("buckets"), dict):
+        cfg["buckets"] = user["buckets"]
+    if isinstance(user.get("horizon_cut_buckets"), list):
+        cfg["horizon_cut_buckets"] = user["horizon_cut_buckets"]
+    for key in ("thresholds", "weights"):
+        if isinstance(user.get(key), dict):
+            cfg[key] = {**cfg[key], **user[key]}
+    return cfg
+
+
+def resolve_slugs(config, categories, tags) -> dict:
+    if tags:
+        return {"custom": list(tags)}
+    buckets = config["buckets"]
+    if categories:
+        return {b: buckets[b] for b in categories if b in buckets}
+    return dict(buckets)

@@ -157,6 +157,34 @@ def test_rank_and_cap_pins_watchlist_and_caps():
     assert len(ranked) == 2
 
 
+def test_load_config_defaults_when_missing():
+    cfg = c.load_config("/nonexistent/dir/nope.json")
+    assert cfg["thresholds"]["extreme_p"] == 0.85
+    assert "monetary" in cfg["buckets"]
+
+def test_load_config_overrides():
+    import json as _json
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "categories.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('{"thresholds": {"min_volume": 99}, "buckets": {"x": ["y"]}}')
+        cfg = c.load_config(p)
+    assert cfg["thresholds"]["min_volume"] == 99           # overridden
+    assert cfg["thresholds"]["extreme_p"] == 0.85          # default preserved
+    assert cfg["buckets"] == {"x": ["y"]}                  # buckets replaced wholesale
+
+def test_resolve_slugs_modes():
+    cfg = c.load_config(None)
+    assert c.resolve_slugs(cfg, None, None).keys() == cfg["buckets"].keys()
+    assert c.resolve_slugs(cfg, ["monetary"], None) == {"monetary": cfg["buckets"]["monetary"]}
+    assert c.resolve_slugs(cfg, None, ["taiwan", "war"]) == {"custom": ["taiwan", "war"]}
+
+def test_now_iso_is_utc():
+    assert c.now_iso().endswith("+00:00")
+
+
 # --------------------------------------------------------------------------- #
 # minimal self-contained runner (no pytest dependency required)
 # --------------------------------------------------------------------------- #
