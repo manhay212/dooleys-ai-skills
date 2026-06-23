@@ -31,6 +31,7 @@ def parse_args(argv=None):
     p.add_argument("--limit", type=int, default=40, help="max events in output")
     p.add_argument("--scan-limit", type=int, default=40, help="events fetched per tag")
     p.add_argument("--all", action="store_true", help="include filtered-out events too")
+    p.add_argument("--no-exclude", action="store_true", help="disable the macro-noise tag denylist")
     p.add_argument("--config", default=DEFAULT_CONFIG)
     p.add_argument("--watchlist", default=DEFAULT_WATCHLIST)
     p.add_argument("--output", default=DEFAULT_OUTPUT)
@@ -50,6 +51,7 @@ def main(argv=None):
     config = pc.load_config(args.config)
     if args.min_volume is not None:
         config["thresholds"]["min_volume"] = args.min_volume
+    exclude_tags = [] if args.no_exclude else config.get("exclude_tags", [])
     th, we = config["thresholds"], config["weights"]
     slugs_by_bucket = pc.resolve_slugs(config, args.categories, args.tags)
     if not slugs_by_bucket:
@@ -99,7 +101,7 @@ def main(argv=None):
         if ev:
             enriched.append(pc.enrich_event(ev, now, ["watchlist"], [], th, we, watchlisted=True))
 
-    kept = [e for e in enriched if pc.passes_denoise(e, th, args.min_score)]
+    kept = [e for e in enriched if pc.passes_denoise(e, th, args.min_score, exclude_tags)]
     ranked = pc.rank_and_cap(kept, args.limit)
     kept_ids = {id(e) for e in ranked}
     filtered_out = [e for e in enriched if id(e) not in kept_ids] if args.all else []
@@ -110,6 +112,7 @@ def main(argv=None):
             "categories": args.categories or list(slugs_by_bucket.keys()),
             "tags": args.tags, "min_score": args.min_score,
             "min_volume": th["min_volume"], "limit": args.limit,
+            "exclude_tags": exclude_tags,
         },
         "buckets_scanned": list(slugs_by_bucket.keys()),
         "counts": {

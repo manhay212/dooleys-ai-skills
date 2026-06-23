@@ -185,6 +185,38 @@ def test_now_iso_is_utc():
     assert c.now_iso().endswith("+00:00")
 
 
+def test_enrich_event_captures_all_tags():
+    ev = {"id": "9", "title": "T", "slug": "t", "endDate": "2026-08-01T00:00:00Z",
+          "volume24hr": 100000,
+          "tags": [{"slug": "pop-culture"}, {"slug": "politics"}],
+          "markets": []}
+    rec = c.enrich_event(ev, NOW, ["elections"], ["politics"])
+    assert rec["all_tags"] == ["politics", "pop-culture"]
+
+def test_passes_denoise_excludes_noise_tag():
+    ev = {"id": "9", "title": "Elon tweets", "slug": "elon",
+          "endDate": "2026-08-01T00:00:00Z", "volume24hr": 2_000_000,
+          "tags": [{"slug": "pop-culture"}, {"slug": "tweets-markets"}, {"slug": "politics"}],
+          "markets": [{"question": "Q", "outcomes": '["Yes","No"]',
+                       "outcomePrices": '["0.5","0.5"]',
+                       "oneDayPriceChange": 0.0, "oneWeekPriceChange": 0.2,
+                       "volume24hr": 2_000_000, "volume": 5_000_000.0, "liquidity": 1000.0,
+                       "endDate": "2026-08-01T00:00:00Z"}]}
+    rec = c.enrich_event(ev, NOW, ["elections"], ["politics"])
+    assert c.passes_denoise(rec, exclude_tags=["pop-culture", "tweets-markets"]) is False
+    assert c.passes_denoise(rec, exclude_tags=[]) is True   # without denylist it passes
+
+def test_passes_denoise_watchlist_bypasses_exclusion():
+    ev = {"id": "9", "title": "x", "slug": "x", "endDate": "2026-08-01T00:00:00Z",
+          "volume24hr": 2_000_000, "tags": [{"slug": "pop-culture"}], "markets": []}
+    rec = c.enrich_event(ev, NOW, ["w"], [], watchlisted=True)
+    assert c.passes_denoise(rec, exclude_tags=["pop-culture"]) is True
+
+def test_load_config_includes_exclude_tags():
+    cfg = c.load_config(None)
+    assert "tweets-markets" in cfg["exclude_tags"]
+
+
 # --------------------------------------------------------------------------- #
 # minimal self-contained runner (no pytest dependency required)
 # --------------------------------------------------------------------------- #

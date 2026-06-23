@@ -6,6 +6,7 @@
     "assets": ["commodities", "crypto", "bitcoin", "ethereum", "etf"]
   },
   "horizon_cut_buckets": ["assets"],
+  "exclude_tags": ["pop-culture", "tweets-markets", "mentions-markets", "sports"],
   "thresholds": {
     "extreme_p": 0.85, "move_1w": 0.10, "move_1d": 0.05,
     "conviction_vol": 50000, "tossup_lo": 0.40, "tossup_hi": 0.60,

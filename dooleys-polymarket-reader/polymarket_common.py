@@ -21,6 +21,7 @@ DEFAULT_BUCKETS = {
     "assets": ["commodities", "crypto", "bitcoin", "ethereum", "etf"],
 }
 HORIZON_CUT_BUCKETS = {"assets"}
+DEFAULT_EXCLUDE_TAGS = ["pop-culture", "tweets-markets", "mentions-markets", "sports"]
 
 _SLUG_URL_RE = re.compile(r"polymarket\.com/(?:event|market)/([^/?#]+)")
 
@@ -137,6 +138,10 @@ def enrich_event(event, now, buckets, tags, thresholds=DEFAULT_THRESHOLDS,
     markets = [compute_market_signals(m, now, thresholds, weights)
                for m in (event.get("markets") or [])]
     event_sig = max((m["significance_score"] for m in markets), default=0.0)
+    native_tags = sorted({
+        t.get("slug") for t in (event.get("tags") or [])
+        if isinstance(t, dict) and t.get("slug")
+    })
     return {
         "id": str(event.get("id", "")),
         "title": event.get("title"),
@@ -145,6 +150,7 @@ def enrich_event(event, now, buckets, tags, thresholds=DEFAULT_THRESHOLDS,
         "end_date": event.get("endDate"),
         "buckets": list(buckets),
         "tags": list(tags),
+        "all_tags": native_tags,
         "volume_24h": to_float(event.get("volume24hr"), 0.0) or 0.0,
         "watchlisted": watchlisted,
         "event_significance": event_sig,
@@ -152,10 +158,12 @@ def enrich_event(event, now, buckets, tags, thresholds=DEFAULT_THRESHOLDS,
     }
 
 
-def passes_denoise(event_rec, thresholds=DEFAULT_THRESHOLDS, min_score=0.0) -> bool:
+def passes_denoise(event_rec, thresholds=DEFAULT_THRESHOLDS, min_score=0.0, exclude_tags=()) -> bool:
     t = thresholds
     if event_rec.get("watchlisted"):
         return True
+    if exclude_tags and (set(event_rec.get("all_tags", [])) & set(exclude_tags)):
+        return False
     if (event_rec.get("volume_24h") or 0) < t["min_volume"]:
         return False
     if HORIZON_CUT_BUCKETS & set(event_rec.get("buckets", [])):
@@ -184,6 +192,7 @@ def load_config(path) -> dict:
         "horizon_cut_buckets": list(HORIZON_CUT_BUCKETS),
         "thresholds": dict(DEFAULT_THRESHOLDS),
         "weights": dict(DEFAULT_WEIGHTS),
+        "exclude_tags": list(DEFAULT_EXCLUDE_TAGS),
     }
     if not path:
         return cfg
@@ -196,6 +205,8 @@ def load_config(path) -> dict:
         cfg["buckets"] = user["buckets"]
     if isinstance(user.get("horizon_cut_buckets"), list):
         cfg["horizon_cut_buckets"] = user["horizon_cut_buckets"]
+    if isinstance(user.get("exclude_tags"), list):
+        cfg["exclude_tags"] = user["exclude_tags"]
     for key in ("thresholds", "weights"):
         if isinstance(user.get(key), dict):
             cfg[key] = {**cfg[key], **user[key]}
