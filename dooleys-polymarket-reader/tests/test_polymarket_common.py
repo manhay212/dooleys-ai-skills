@@ -80,6 +80,11 @@ def test_compute_market_signals_full():
     assert rec["flags"]["big_move"] is True
     assert 30 < rec["days_to_resolve"] < 40
     assert 0.0 <= rec["significance_score"] <= 1.0
+    assert set(rec.keys()) == {
+        "question", "consensus_outcome", "implied_prob", "extremeness",
+        "move_1d", "move_1w", "volume_24h", "volume_total", "liquidity",
+        "days_to_resolve", "flags", "significance_score",
+    }
 
 def test_compute_market_signals_none_price_change_safe():
     m = dict(FED_MARKET, oneDayPriceChange=None, oneWeekPriceChange=None)

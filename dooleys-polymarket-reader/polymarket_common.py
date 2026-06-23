@@ -94,7 +94,7 @@ def compute_flags(prob, move_1d, move_1w, vol24h, thresholds) -> dict:
 def significance_score(extremeness, move_1w, vol24h, is_tossup, weights, thresholds) -> float:
     t = thresholds
     conviction_norm = min(1.0, math.log10(max(vol24h or 0, 1)) / math.log10(t["conviction_ref"]))
-    momentum_norm = min(1.0, (move_1w or 0) / t["momentum_ref"])
+    momentum_norm = min(1.0, abs(move_1w or 0) / t["momentum_ref"])
     tossup_term = 1.0 if is_tossup else 0.0
     score = (weights["conviction"] * conviction_norm
              + weights["extremeness"] * max(0.0, min(1.0, extremeness))
