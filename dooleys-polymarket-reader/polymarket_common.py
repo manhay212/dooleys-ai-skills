@@ -126,3 +126,49 @@ def compute_market_signals(market: dict, now, thresholds=DEFAULT_THRESHOLDS, wei
         "flags": flags,
         "significance_score": significance_score(extremeness, move_1w, vol24h, flags["high_stakes_tossup"], weights, thresholds),
     }
+
+
+def event_url(slug) -> str:
+    return f"https://polymarket.com/event/{slug}" if slug else ""
+
+
+def enrich_event(event, now, buckets, tags, thresholds=DEFAULT_THRESHOLDS,
+                 weights=DEFAULT_WEIGHTS, watchlisted=False) -> dict:
+    markets = [compute_market_signals(m, now, thresholds, weights)
+               for m in (event.get("markets") or [])]
+    event_sig = max((m["significance_score"] for m in markets), default=0.0)
+    return {
+        "id": str(event.get("id", "")),
+        "title": event.get("title"),
+        "slug": event.get("slug"),
+        "url": event_url(event.get("slug")),
+        "end_date": event.get("endDate"),
+        "buckets": list(buckets),
+        "tags": list(tags),
+        "volume_24h": to_float(event.get("volume24hr"), 0.0) or 0.0,
+        "watchlisted": watchlisted,
+        "event_significance": event_sig,
+        "markets": markets,
+    }
+
+
+def passes_denoise(event_rec, thresholds=DEFAULT_THRESHOLDS, min_score=0.0) -> bool:
+    t = thresholds
+    if event_rec.get("watchlisted"):
+        return True
+    if (event_rec.get("volume_24h") or 0) < t["min_volume"]:
+        return False
+    if HORIZON_CUT_BUCKETS & set(event_rec.get("buckets", [])):
+        days = days_until(event_rec.get("end_date"), datetime.now(timezone.utc))
+        if days is not None and days < t["min_horizon_days"]:
+            return False
+    if event_rec.get("event_significance", 0.0) < min_score:
+        return False
+    return True
+
+
+def rank_and_cap(event_recs: list, limit: int) -> list:
+    pinned = [e for e in event_recs if e.get("watchlisted")]
+    rest = [e for e in event_recs if not e.get("watchlisted")]
+    rest.sort(key=lambda e: e.get("event_significance", 0.0), reverse=True)
+    return pinned + rest[: max(0, limit - len(pinned))]

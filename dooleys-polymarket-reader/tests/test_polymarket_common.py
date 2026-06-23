@@ -105,6 +105,58 @@ def test_compute_market_signals_none_price_change_safe():
     assert rec["move_1d"] == 0.0 and rec["move_1w"] == 0.0
 
 
+def _event(id=1, vol=500000, end="2026-08-01T00:00:00Z", buckets=("monetary",),
+           pw="0.50", change=0.20):
+    return {
+        "id": str(id),
+        "title": "Sample", "slug": "sample-%s" % id, "endDate": end,
+        "volume24hr": vol,
+        "markets": [{
+            "question": "Q?", "outcomes": '["Yes","No"]',
+            "outcomePrices": '["%s","%s"]' % (pw, round(1 - float(pw), 4)),
+            "oneDayPriceChange": 0.0, "oneWeekPriceChange": change,
+            "volume24hr": vol, "volume": vol * 3, "liquidity": 1000.0,
+            "endDate": end,
+        }],
+    }, buckets
+
+def test_enrich_event_shape_and_significance():
+    ev, buckets = _event()
+    rec = c.enrich_event(ev, NOW, list(buckets), ["fed-rates"])
+    assert rec["slug"] == "sample-1"
+    assert rec["url"] == "https://polymarket.com/event/sample-1"
+    assert rec["buckets"] == ["monetary"] and rec["tags"] == ["fed-rates"]
+    assert rec["event_significance"] == rec["markets"][0]["significance_score"]
+    assert rec["watchlisted"] is False
+
+def test_passes_denoise_volume_floor():
+    ev, b = _event(vol=5000)  # below 10k floor
+    rec = c.enrich_event(ev, NOW, list(b), [])
+    assert c.passes_denoise(rec) is False
+
+def test_passes_denoise_assets_horizon_cut():
+    ev, _ = _event(end="2026-06-24T06:00:00Z", buckets=("assets",))  # ~0.25 days
+    rec = c.enrich_event(ev, NOW, ["assets"], ["crypto"])
+    assert c.passes_denoise(rec) is False           # assets + <1 day => cut
+    ev2, _ = _event(end="2026-06-24T06:00:00Z", buckets=("monetary",))
+    rec2 = c.enrich_event(ev2, NOW, ["monetary"], ["fed-rates"])
+    assert c.passes_denoise(rec2) is True           # monetary same-day => kept
+
+def test_passes_denoise_min_score():
+    ev, b = _event(vol=500000)
+    rec = c.enrich_event(ev, NOW, list(b), [])
+    assert c.passes_denoise(rec, min_score=0.99) is False
+
+def test_rank_and_cap_pins_watchlist_and_caps():
+    a = c.enrich_event(_event(id=1, vol=20000, change=0.0)[0], NOW, ["monetary"], [])
+    b = c.enrich_event(_event(id=2, vol=9_000_000, change=0.25)[0], NOW, ["monetary"], [])
+    w = c.enrich_event(_event(id=3, vol=11000, change=0.0)[0], NOW, ["monetary"], [], watchlisted=True)
+    ranked = c.rank_and_cap([a, b, w], limit=2)
+    assert ranked[0]["watchlisted"] is True          # pinned first
+    assert ranked[1]["id"] == "2"                     # then highest score
+    assert len(ranked) == 2
+
+
 # --------------------------------------------------------------------------- #
 # minimal self-contained runner (no pytest dependency required)
 # --------------------------------------------------------------------------- #
