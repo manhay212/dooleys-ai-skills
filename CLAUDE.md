@@ -93,3 +93,10 @@ A folder `dooleys-{skill-name}/` that is everything an agent needs to perform on
   `health.py` + `summarize.py` pure logic are unit-tested. Catalog/data live in `$MARKET_DATA_DIR`
   (outside this repo), not here.
 - **dooleys-feedback-learner** — metacognitive skill extracting principles from user corrections.
+- **dooleys-polymarket-reader** — keyless reader for Polymarket prediction-market signals (API
+  flavor). `polymarket_reader.py` (scan macro categories → ranked, de-noised significant markets),
+  `polymarket_search.py` (ad-hoc keyword search), `polymarket_event.py` (deep-dive one event +
+  optional odds history), sharing `polymarket_client.py` (Gamma + CLOB-read transport) and
+  `polymarket_common.py` (pure signal/scoring logic, unit-tested). Macro vs. noise handled by a
+  category allowlist + significance score (extreme consensus / big move / conviction / toss-up);
+  the agent does the investment interpretation. Keys not required.

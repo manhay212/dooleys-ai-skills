@@ -21,6 +21,7 @@ When an AI agent detects a user request that matches a skill's description, it l
 | [dooleys-substack-reader](./dooleys-substack-reader/) | Read Substack newsletter posts via Substack's public JSON API (no login/key) — by profile (time-windowed, expands a handle to all its publications) or by post URL (full text as Markdown), JSON output | 1.0.0 |
 | [dooleys-market-data](./dooleys-market-data/) | Market-data engine — backfills/updates numeric time-series from free sources (FRED/Yahoo/EIA/CoinGecko/Treasury) into SQLite and returns compact computed summaries (stats/ratio/spread/dashboard). One-shot `daily` routine writes a trustworthy UPDATE_LOG; fetch-result-based health check | 1.3.0 |
 | [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
+| [dooleys-polymarket-reader](./dooleys-polymarket-reader/) | Read macro/investment signals from Polymarket prediction markets via public keyless APIs — scan curated macro categories for significant markets (extreme consensus, big moves, conviction volume, high-stakes tossups), keyword-search ad-hoc, or deep-dive one event with optional odds history. De-noise pipeline filters pop-culture/sports noise by default. No API key required. | 1.0.0 |
 
 ## Repository Structure
 
@@ -76,6 +77,19 @@ dooleys-ai-skills/
 │   ├── references/source-notes.md   # per-source pitfalls + migration history
 │   ├── requirements.txt
 │   └── .gitignore                   # excludes the local .db / snapshots / secrets
+├── dooleys-polymarket-reader/       # API-based skill (Polymarket Gamma + CLOB read APIs, keyless)
+│   ├── SKILL.md
+│   ├── README.md
+│   ├── polymarket_reader.py         # scan macro categories → ranked de-noised significant-market feed
+│   ├── polymarket_search.py         # ad-hoc keyword search, output JSON
+│   ├── polymarket_event.py          # deep-dive one event by URL/slug/id + optional odds history
+│   ├── polymarket_client.py         # HTTP transport (Gamma + CLOB; the only networked module)
+│   ├── polymarket_common.py         # pure signal/scoring/de-noise logic (unit-tested)
+│   ├── tests/                       # offline unit tests (28 tests, built-in runner)
+│   ├── config/categories.example.json  # buckets, thresholds, weights, exclude_tags
+│   ├── config/watchlist.example.json   # always-track events list
+│   ├── requirements.txt             # requests (only dep)
+│   └── .gitignore
 └── dooleys-{future-skill}/          # Pattern for new skills
 ```
 
