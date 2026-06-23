@@ -78,3 +78,51 @@ def parse_event_ref(s: str) -> dict:
     if s.isdigit():
         return {"kind": "id", "value": s}
     return {"kind": "slug", "value": s}
+
+
+def compute_flags(prob, move_1d, move_1w, vol24h, thresholds) -> dict:
+    t = thresholds
+    high_conviction = (vol24h or 0) >= t["conviction_vol"]
+    return {
+        "extreme_consensus": prob >= t["extreme_p"],
+        "big_move": (move_1w >= t["move_1w"]) or (move_1d >= t["move_1d"]),
+        "high_conviction": high_conviction,
+        "high_stakes_tossup": (t["tossup_lo"] <= prob <= t["tossup_hi"]) and high_conviction,
+    }
+
+
+def significance_score(extremeness, move_1w, vol24h, is_tossup, weights, thresholds) -> float:
+    t = thresholds
+    conviction_norm = min(1.0, math.log10(max(vol24h or 0, 1)) / math.log10(t["conviction_ref"]))
+    momentum_norm = min(1.0, (move_1w or 0) / t["momentum_ref"])
+    tossup_term = 1.0 if is_tossup else 0.0
+    score = (weights["conviction"] * conviction_norm
+             + weights["extremeness"] * max(0.0, min(1.0, extremeness))
+             + weights["momentum"] * momentum_norm
+             + weights["tossup"] * tossup_term)
+    return round(min(1.0, max(0.0, score)), 4)
+
+
+def compute_market_signals(market: dict, now, thresholds=DEFAULT_THRESHOLDS, weights=DEFAULT_WEIGHTS) -> dict:
+    outcomes = coerce_list(market.get("outcomes"))
+    prices = coerce_list(market.get("outcomePrices"))
+    prob, label = implied_probability(outcomes, prices)
+    extremeness = abs(prob - 0.5) / 0.5
+    move_1d = abs(to_float(market.get("oneDayPriceChange"), 0.0))
+    move_1w = abs(to_float(market.get("oneWeekPriceChange"), 0.0))
+    vol24h = to_float(market.get("volume24hr"), 0.0) or 0.0
+    flags = compute_flags(prob, move_1d, move_1w, vol24h, thresholds)
+    return {
+        "question": market.get("question"),
+        "consensus_outcome": label,
+        "implied_prob": round(prob, 4),
+        "extremeness": round(extremeness, 4),
+        "move_1d": round(move_1d, 4),
+        "move_1w": round(move_1w, 4),
+        "volume_24h": vol24h,
+        "volume_total": to_float(market.get("volume"), 0.0) or 0.0,
+        "liquidity": to_float(market.get("liquidity"), 0.0) or 0.0,
+        "days_to_resolve": (lambda d: round(d, 2) if d is not None else None)(days_until(market.get("endDate"), now)),
+        "flags": flags,
+        "significance_score": significance_score(extremeness, move_1w, vol24h, flags["high_stakes_tossup"], weights, thresholds),
+    }
