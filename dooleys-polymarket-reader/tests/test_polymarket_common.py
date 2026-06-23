@@ -1,4 +1,17 @@
+"""Unit tests for the pure logic in polymarket_common.
+
+These cover parsing / signal / scoring / de-noise / config logic that does NOT
+need the network, so they run fast and offline:
+
+    python3 tests/test_polymarket_common.py    # built-in runner (no pytest needed)
+    python3 -m pytest tests/                    # also works if pytest is installed
+"""
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import polymarket_common as c
 
 
@@ -90,3 +103,24 @@ def test_compute_market_signals_none_price_change_safe():
     m = dict(FED_MARKET, oneDayPriceChange=None, oneWeekPriceChange=None)
     rec = c.compute_market_signals(m, NOW)
     assert rec["move_1d"] == 0.0 and rec["move_1w"] == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# minimal self-contained runner (no pytest dependency required)
+# --------------------------------------------------------------------------- #
+def _run():
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    failed = 0
+    for fn in fns:
+        try:
+            fn()
+            print(f"ok   {fn.__name__}")
+        except Exception as e:  # noqa: BLE001
+            failed += 1
+            print(f"FAIL {fn.__name__}: {type(e).__name__}: {e}")
+    print(f"\n{len(fns) - failed}/{len(fns)} passed")
+    return failed
+
+
+if __name__ == "__main__":
+    sys.exit(1 if _run() else 0)
