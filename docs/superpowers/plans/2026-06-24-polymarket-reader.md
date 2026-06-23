@@ -6,7 +6,7 @@
 
 **Architecture:** Thin HTTP transport (`polymarket_client.py`, Gamma + CLOB-read, no auth) + pure signal/scoring logic (`polymarket_common.py`, unit-tested) + three focused entry scripts (`polymarket_reader.py` scan, `polymarket_search.py` ad-hoc, `polymarket_event.py` drill-down). Mirrors the existing `dooleys-substack-reader` split.
 
-**Tech Stack:** Python 3.8+ (host 3.12), `requests`, `pytest`. No SDK, no auth.
+**Tech Stack:** Python 3.8+ (host has `python3` 3.12 ONLY — no `python`, no `pip`, no `pytest`; `requests` 2.31 is available system-wide). `requests`. No SDK, no auth. Tests use a **built-in runner** (no pytest), matching `dooleys-substack-reader`.
 
 ## Global Constraints
 
@@ -15,6 +15,7 @@
 - **Never commit secrets/output/config:** `.gitignore` excludes `config/*.json` (ship `*.example`), `output_*.json`, `__pycache__/`.
 - **Staging:** stage explicit paths only (`git add dooleys-polymarket-reader/ ...`), never `git add -A`; do not touch other skills' folders.
 - **Skill folder:** `dooleys-polymarket-reader/` at repo root `/home/dooleys/.hermes/custom-skills/`.
+- **Host runtime:** invoke everything with `python3` (there is no `python`). Tests run via the built-in runner `python3 tests/test_polymarket_common.py` (no pytest on host); test functions therefore take NO arguments (use `tempfile`, never pytest's `tmp_path`). The test file inserts the skill root on `sys.path` so `import polymarket_common` resolves when run from the skill dir.
 - **Default thresholds (tunable):** extreme_p 0.85, move_1w 0.10, move_1d 0.05, conviction_vol 50_000, tossup 0.40–0.60, min_volume 10_000, min_horizon_days 1.0, momentum_ref 0.25, conviction_ref 10_000_000.
 - **Default score weights (sum 1.0):** conviction 0.35, extremeness 0.25, momentum 0.30, tossup 0.10.
 - **Default buckets → tag slugs:**
@@ -205,7 +206,7 @@ def test_default_constants_present():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: FAIL — `ModuleNotFoundError: No module named 'polymarket_common'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -296,7 +297,7 @@ def parse_event_ref(s: str) -> dict:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: PASS (10 tests).
 
 - [ ] **Step 5: Commit**
@@ -376,7 +377,7 @@ def test_compute_market_signals_none_price_change_safe():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: FAIL — `AttributeError: module ... has no attribute 'compute_flags'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -433,7 +434,7 @@ def compute_market_signals(market: dict, now, thresholds=DEFAULT_THRESHOLDS, wei
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: PASS (all prior + 6 new).
 
 - [ ] **Step 5: Commit**
@@ -520,7 +521,7 @@ def test_rank_and_cap_pins_watchlist_and_caps():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: FAIL — `AttributeError: ... 'enrich_event'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -577,7 +578,7 @@ Note: `passes_denoise` re-derives `days` from `now()` for the horizon check; tes
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: PASS (all).
 
 - [ ] **Step 5: Commit**
@@ -606,17 +607,23 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write failing tests**
 
-Append to `tests/test_polymarket_common.py`:
+Append to `tests/test_polymarket_common.py`. NOTE: the built-in runner calls each
+`test_*` with no arguments, so do NOT use pytest's `tmp_path` fixture — use `tempfile`:
 ```python
-def test_load_config_defaults_when_missing(tmp_path):
-    cfg = c.load_config(str(tmp_path / "nope.json"))
+def test_load_config_defaults_when_missing():
+    cfg = c.load_config("/nonexistent/dir/nope.json")
     assert cfg["thresholds"]["extreme_p"] == 0.85
     assert "monetary" in cfg["buckets"]
 
-def test_load_config_overrides(tmp_path):
-    p = tmp_path / "categories.json"
-    p.write_text('{"thresholds": {"min_volume": 99}, "buckets": {"x": ["y"]}}')
-    cfg = c.load_config(str(p))
+def test_load_config_overrides():
+    import json as _json
+    import os
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "categories.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('{"thresholds": {"min_volume": 99}, "buckets": {"x": ["y"]}}')
+        cfg = c.load_config(p)
     assert cfg["thresholds"]["min_volume"] == 99           # overridden
     assert cfg["thresholds"]["extreme_p"] == 0.85          # default preserved
     assert cfg["buckets"] == {"x": ["y"]}                  # buckets replaced wholesale
@@ -633,7 +640,7 @@ def test_now_iso_is_utc():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: FAIL — `AttributeError: ... 'load_config'`.
 
 - [ ] **Step 3: Write minimal implementation**
@@ -679,7 +686,7 @@ def resolve_slugs(config, categories, tags) -> dict:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/test_polymarket_common.py -q`
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
 Expected: PASS (all).
 
 - [ ] **Step 5: Commit**
@@ -805,7 +812,7 @@ class PolymarketClient:
 
 Run:
 ```bash
-cd dooleys-polymarket-reader && python -c "
+cd dooleys-polymarket-reader && python3 -c "
 from polymarket_client import PolymarketClient
 cl = PolymarketClient()
 evs = cl.get_events_by_tag('fed-rates', limit=3)
@@ -983,7 +990,7 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd dooleys-polymarket-reader && python polymarket_reader.py --limit 10 && python -c "
+cd dooleys-polymarket-reader && python3 polymarket_reader.py --limit 10 && python3 -c "
 import json
 d = json.load(open('output_polymarket_reader.json'))
 assert 'timestamp' in d and d['events'], 'empty output'
@@ -998,7 +1005,7 @@ Expected: writes file; top event is a macro market (Fed/geopolitics/election) wi
 
 Run:
 ```bash
-cd dooleys-polymarket-reader && python polymarket_reader.py --tags nonexistent-tag-xyz,fed-rates --limit 5 && python -c "
+cd dooleys-polymarket-reader && python3 polymarket_reader.py --tags nonexistent-tag-xyz,fed-rates --limit 5 && python3 -c "
 import json; d = json.load(open('output_polymarket_reader.json'))
 print('errors:', list(d['errors'].keys()))   # may include the bad tag if it errors; empty tag returns [] not an error
 print('kept:', d['counts']['events_kept'])
@@ -1010,7 +1017,7 @@ Expected: runs cleanly (a bad/empty tag yields 0 events, not a crash); fed-rates
 
 Run:
 ```bash
-cd dooleys-polymarket-reader && env -u POLYMARKET_API_KEY -u POLYMARKET_SECRET -u POLYMARKET_PASSPHRASE python polymarket_reader.py --categories monetary --limit 3 >/dev/null && echo "KEYLESS OK"
+cd dooleys-polymarket-reader && env -u POLYMARKET_API_KEY -u POLYMARKET_SECRET -u POLYMARKET_PASSPHRASE python3 polymarket_reader.py --categories monetary --limit 3 >/dev/null && echo "KEYLESS OK"
 ```
 Expected: `KEYLESS OK`.
 
@@ -1108,7 +1115,7 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd dooleys-polymarket-reader && python polymarket_search.py taiwan --limit 5 && python -c "
+cd dooleys-polymarket-reader && python3 polymarket_search.py taiwan --limit 5 && python3 -c "
 import json; d = json.load(open('output_polymarket_search.json'))
 assert d['query'] == 'taiwan' and 'timestamp' in d
 print('count:', d['count'], '| first:', d['events'][0]['title'] if d['events'] else None)
@@ -1118,7 +1125,7 @@ Expected: returns events mentioning Taiwan (e.g. a China×Taiwan event), each wi
 
 - [ ] **Step 3: Failure path (no query)**
 
-Run: `cd dooleys-polymarket-reader && python polymarket_search.py; echo "exit=$?"`
+Run: `cd dooleys-polymarket-reader && python3 polymarket_search.py; echo "exit=$?"`
 Expected: `No query provided.` and `exit=1`.
 
 - [ ] **Step 4: Commit**
@@ -1233,7 +1240,7 @@ if __name__ == "__main__":
 
 Run:
 ```bash
-cd dooleys-polymarket-reader && python polymarket_event.py "https://polymarket.com/event/fed-decision-in-july" --history --interval 1w && python -c "
+cd dooleys-polymarket-reader && python3 polymarket_event.py "https://polymarket.com/event/fed-decision-in-july" --history --interval 1w && python3 -c "
 import json; d = json.load(open('output_polymarket_event.json'))
 e = d['event']
 print('title:', e['title'], '| markets:', len(e['markets']))
@@ -1244,13 +1251,13 @@ Expected: prints the event title, its markets, and >0 history points on the firs
 
 - [ ] **Step 3: Failure path (bad ref)**
 
-Run: `cd dooleys-polymarket-reader && python polymarket_event.py "this-slug-does-not-exist-xyz"; echo "exit=$?"`
+Run: `cd dooleys-polymarket-reader && python3 polymarket_event.py "this-slug-does-not-exist-xyz"; echo "exit=$?"`
 Expected: `Event not found ...` and `exit=1`.
 
 - [ ] **Step 4: Run the full unit suite once more**
 
-Run: `cd dooleys-polymarket-reader && python -m pytest tests/ -q`
-Expected: all green.
+Run: `cd dooleys-polymarket-reader && python3 tests/test_polymarket_common.py`
+Expected: all green (`N/N passed`, exit 0).
 
 - [ ] **Step 5: Write `SKILL.md`**
 
@@ -1276,7 +1283,7 @@ Body MUST cover (write it out in full prose + tables, following the `dooleys-sub
 
 - [ ] **Step 6: Write `README.md`**
 
-`dooleys-polymarket-reader/README.md` — human setup + testing walkthrough (model on `dooleys-substack-reader/README.md`): what the skill does; install (`pip install -r requirements.txt`); `cp config/categories.example.json config/categories.json` (optional — defaults are built in) and `cp config/watchlist.example.json config/watchlist.json` (optional); the three commands with sample output; a **Testing** section listing: `python -m pytest tests/ -q` (unit), the three live smokes from Tasks 7–9, the failure paths, and the keyless check; note `output_*.json` and `config/*.json` are gitignored.
+`dooleys-polymarket-reader/README.md` — human setup + testing walkthrough (model on `dooleys-substack-reader/README.md`). IMPORTANT: this host has `python3` only (no `python`, no `pip`/`pytest`); `requests` is already available system-wide. So: use `python3` everywhere; tests run via the built-in runner with **no pytest**. Cover: what the skill does; install note (`pip install -r requirements.txt` only if `requests` is missing; a venv is optional); `cp config/categories.example.json config/categories.json` (optional — defaults are built in) and `cp config/watchlist.example.json config/watchlist.json` (optional); the three commands (`python3 polymarket_reader.py …`, `python3 polymarket_search.py …`, `python3 polymarket_event.py …`) with sample output; a **Testing** section listing: `python3 tests/test_polymarket_common.py` (unit, built-in runner — "no pytest needed"; `python3 -m pytest tests/` also works if pytest is installed), the three live smokes from Tasks 7–9, the failure paths, and the keyless check; note `output_*.json` and `config/*.json` are gitignored.
 
 - [ ] **Step 7: Update repo `README.md` and `CLAUDE.md`**
 
