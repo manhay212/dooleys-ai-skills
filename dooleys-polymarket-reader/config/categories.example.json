@@ -1,0 +1,16 @@
+{
+  "buckets": {
+    "monetary": ["economy", "fed-rates", "interest-rates", "inflation", "recession", "gdp", "macro-indicators"],
+    "elections": ["elections", "politics", "us-politics", "federal-government"],
+    "geopolitics": ["geopolitics", "international-affairs", "war", "middle-east"],
+    "assets": ["commodities", "crypto", "bitcoin", "ethereum", "etf"]
+  },
+  "horizon_cut_buckets": ["assets"],
+  "thresholds": {
+    "extreme_p": 0.85, "move_1w": 0.10, "move_1d": 0.05,
+    "conviction_vol": 50000, "tossup_lo": 0.40, "tossup_hi": 0.60,
+    "min_volume": 10000, "min_horizon_days": 1.0,
+    "momentum_ref": 0.25, "conviction_ref": 10000000
+  },
+  "weights": { "conviction": 0.35, "extremeness": 0.25, "momentum": 0.30, "tossup": 0.10 }
+}
