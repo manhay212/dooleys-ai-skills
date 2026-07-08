@@ -47,6 +47,8 @@ _ADAPTER_REGISTRY: Dict[str, str] = {
     "coingecko": "sources.coingecko",
     "treasury": "sources.treasury",
     "yahoo": "sources.yahoo",
+    "yahoo_direct": "sources.yahoo_direct",
+    "eodhd": "sources.eodhd",
 }
 
 

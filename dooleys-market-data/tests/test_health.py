@@ -182,3 +182,18 @@ def test_render_flags_broken_series_in_attention_table():
     assert "## ⚠️ Needs attention (1)" in md
     assert "TGA_DAILY" in md
     assert "⚠️" in md  # the result line warns
+
+
+def test_render_shows_served_by_column_and_fallback_marker():
+    served = _mk("SPX", "yahoo_direct", "ok")
+    served["served_by"] = "yahoo_direct"
+    served["fell_back"] = False
+    fell = _mk("NDX", "yahoo_direct", "ok")
+    fell["served_by"] = "fred"           # primary was yahoo_direct → this is a fall-back
+    fell["fell_back"] = True
+    rep = health.build_report([served, fell])
+    md = health.render_update_log(rep, None, [served, fell], "2026-07-09T06:00:00+08:00")
+    assert "Served by" in md              # new column header
+    assert "fred ⚠" in md                 # fall-back marked
+    # the primary-served row shows the source with no warning marker
+    assert "| SPX | yahoo_direct | yahoo_direct |" in md

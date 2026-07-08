@@ -1,13 +1,15 @@
 ---
 name: dooleys-market-data
 description: Query, backfill, and update the local market-data SQLite store (prices, macro indicators, rates, Fed liquidity, crypto, FX, energy). Use this skill whenever investment/market analysis needs current OR historical numbers — index/commodity/crypto prices, yields, Fed liquidity (WALCL/RRP/TGA/SRF), M2, CPI, oil & products, VIX/MOVE, cross-asset ratios & spreads, percentile/z-score context, or distance-to-trigger versus KOL thresholds. Returns compact computed summaries, never raw row dumps. Run `daily` once a day to refresh everything and write UPDATE_LOG.md.
-version: 1.3.0
+version: 1.4.0
 category: dooleys
 required_environment_variables:
   - MARKET_DATA_DIR
   - FRED_API_KEY
   - EIA_API_KEY
   - COINGECKO_API_KEY
+  - EODHD_API_KEY      # OPTIONAL — unset by default; setting it activates the dormant eodhd source
+  - TWELVEDATA_API_KEY # OPTIONAL — unset by default; only used if referenced in a catalog chain
 ---
 
 # Market Data Skill
@@ -30,6 +32,7 @@ of recalling them from training or guessing from a web page. Use web search for 
 - Python 3.8+ ; `pip install -r requirements.txt`
 - `MARKET_DATA_DIR` points at the data dir (default `~/.hermes-backup-repo/market-data`)
 - API keys in `~/.hermes/.env`: `FRED_API_KEY`, `EIA_API_KEY` (required), `COINGECKO_API_KEY` (optional)
+- `EODHD_API_KEY` / `TWELVEDATA_API_KEY` are **optional and dormant** — the engine skips any source whose key is unset (see "Source failover & provenance" below). Nothing breaks without them.
 
 > Run everything with the host's venv python, e.g.
 > `~/.hermes/hermes-agent/venv/bin/python3 market_data.py …` (it has pandas/pyarrow/yfinance).
@@ -127,14 +130,54 @@ code change. Optional per-series field `staleness_grace_days` widens the "late" 
 
 | Source | Status | Coverage |
 |--------|--------|----------|
-| FRED | ✅ working | yields, Fed liquidity (WALCL/RRP/TGA/RESERVES/SRF), M2, CPI/PCE/jobs, OAS, VIX/OVX, FX, EFFR, term premium, natgas, broad USD — ~33 series |
-| Yahoo (yfinance) | ✅ working | equity indices, ETFs, futures, DXY, MOVE — ~14 series |
-| EIA | ✅ working | WTI/Brent spot, crude/gasoline/distillate stocks, SPR, refinery utilization — 7 series |
-| CoinGecko | ✅ working (free tier, 365d) | BTC, ETH, USDT/USDC supply — 4 series |
-| Treasury FiscalData | ✅ working (fixed 2026-06-22) | daily TGA closing balance (`operating_cash_balance` endpoint) |
-| Stooq | ❌ deprecated | replaced by Yahoo (Cloudflare JS wall) |
+| `yahoo_direct` | ✅ primary for prices | direct Yahoo v8 chart via curl_cffi browser impersonation (defeats anti-bot 429s); equity indices (incl. ex-US), single names, ETFs, futures, DXY, MOVE |
+| `yahoo` (yfinance) | ✅ fallback | same data, independent code path — kept as a second Yahoo attempt in chains |
+| FRED | ✅ working | yields, Fed liquidity (WALCL/RRP/TGA/RESERVES/SRF), M2, CPI/PCE/jobs, OAS, VIX/OVX, FX + a free fallback for US indices/Nikkei |
+| EIA | ✅ working | WTI/Brent spot, crude/gasoline/distillate stocks, SPR, refinery utilization |
+| CoinGecko | ✅ working (free tier, 365d) | BTC, ETH, USDT/USDC supply |
+| Treasury FiscalData | ✅ working | daily TGA closing balance (`operating_cash_balance` endpoint) |
+| `eodhd` | 💤 dormant | licensed global EOD (indices/single-names/FX). Ships wired but SKIPPED until `EODHD_API_KEY` is set |
+| Stooq | ❌ deprecated | still Cloudflare-JS-walled (re-verified 2026-07); do not use |
 
 See `references/source-notes.md` for per-source pitfalls and migration history.
+
+## Source failover & provenance (v1.4.0)
+
+A series can list an **ordered chain of sources**, tried until one returns data:
+
+```yaml
+- ticker: SPX
+  name: S&P 500
+  table_kind: ohlcv
+  sources:
+    - {source: yahoo_direct, symbol: "^GSPC"}
+    - {source: yahoo,        symbol: "^GSPC"}
+    - {source: fred,         symbol: SP500, kind: observations}  # close-only backstop
+```
+
+- The legacy single-source form (`source:` + `source_symbol:`) still works unchanged — it is
+  treated as a one-element chain. Migrate a series to a chain only when you want a fallback.
+- The engine tries each **available** source in order, stores the **first non-empty** result,
+  records **which source served it** (`ingest_runs.served_by`), and only marks a series
+  `needs_attention` when **every** source fails. A source is *available* iff its `auth_env`
+  key is set (keyless sources like `yahoo_direct`/`fred`/`treasury` are always available).
+- `UPDATE_LOG.md` shows a **Served by** column; a `⚠` means a fall-back served (the primary is
+  degrading) — an early warning before the series ever flags broken.
+- A fallback that yields a different shape (e.g. FRED gives a close-only `value`, series is
+  `ohlcv`) is auto-normalized (value → close/adj_close). Declare a ref's native shape with
+  `kind:` when it differs from the series' `table_kind`.
+
+### Activating EODHD later (one env var)
+
+`eodhd` ships as a complete but **dormant** adapter. To turn it on when a key is purchased:
+
+1. Put `EODHD_API_KEY=…` in `~/.hermes/.env`. That alone makes every `eodhd` chain ref active.
+2. *(Optional, recommended)* In `catalog.yaml`, move the `{source: eodhd, symbol: "<EXCH>"}`
+   ref to the **front** of index/single-name chains so it becomes primary (EODHD symbols use
+   exchange suffixes: `GSPC.INDX`, `KS11.INDX`, `NVDA.US`, `0700.HK`). Keep `yahoo_direct` as
+   the fallback.
+3. `sync-catalog` (only if you changed chains) → `backfill --ticker …` for any series whose
+   primary changed. **No code change required.**
 
 ## Hard Rules
 

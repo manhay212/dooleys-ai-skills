@@ -58,6 +58,38 @@ def load_sources(sources_path: Optional[Path] = None) -> Dict[str, Any]:
     return sources
 
 
+def normalize_sources(entry: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the ordered list of source refs for a catalog/series entry.
+
+    Accepts either the legacy single-source form (``source`` + ``source_symbol``)
+    or the new chain form (``sources: [{source, symbol, kind?}, ...]``). Always
+    returns a list of ``{"source", "symbol", "kind"}`` dicts (``kind`` may be
+    ``None``). Returns ``[]`` when nothing usable is present.
+
+    The chain lives in ``catalog.yaml``; it is the source of truth and is re-read
+    at fetch time (the DB ``series`` row only stores the primary — element 0).
+    """
+    chain = entry.get("sources")
+    if chain:
+        out: List[Dict[str, Any]] = []
+        for ref in chain:
+            if not isinstance(ref, dict):
+                continue
+            src = ref.get("source")
+            sym = ref.get("symbol", ref.get("source_symbol"))
+            if not src or not sym:
+                continue
+            out.append({"source": src, "symbol": sym, "kind": ref.get("kind")})
+        if out:
+            return out
+    # Legacy fallback
+    src = entry.get("source")
+    sym = entry.get("source_symbol")
+    if src and sym:
+        return [{"source": src, "symbol": sym, "kind": entry.get("table_kind")}]
+    return []
+
+
 def iter_catalog_series(catalog: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Public accessor: the flattened list of series dicts from the catalog
     (each with its parent asset_class injected). Loads the catalog if not given.
@@ -207,9 +239,18 @@ def _catalog_to_series_record(cat_entry: Dict[str, Any]) -> Dict[str, Any]:
     Handles trigger_levels: converts dict to JSON string if present.
     """
     import json
-    
+
+    # Derive the primary source/symbol from a chain (element 0) so chain-form
+    # entries satisfy the NOT NULL source/source_symbol columns. Legacy entries
+    # already carry these fields, so setdefault leaves them untouched.
+    refs = normalize_sources(cat_entry)
+    if refs:
+        cat_entry = dict(cat_entry)
+        cat_entry.setdefault("source", refs[0]["source"])
+        cat_entry.setdefault("source_symbol", refs[0]["symbol"])
+
     record: Dict[str, Any] = {}
-    
+
     field_map = [
         "ticker", "name", "asset_class", "subclass", "source", "source_symbol",
         "unit", "frequency", "table_kind", "status", "notes",
@@ -230,9 +271,12 @@ def _catalog_to_series_record(cat_entry: Dict[str, Any]) -> Dict[str, Any]:
     if "first_available" in cat_entry:
         record["first_available"] = cat_entry["first_available"]
     
-    # Handle extra catalog fields (eia_route, etc.) — store in notes
+    # Handle extra catalog fields (eia_route, etc.) — store in notes.
+    # 'sources' (the chain) is re-read from catalog.yaml at fetch time, so it is
+    # NOT stashed here (it would bloat notes and the DB only needs the primary).
     extra_fields = {k: v for k, v in cat_entry.items()
-                    if k not in field_map and k not in ["trigger_levels", "first_available", "description"]}
+                    if k not in field_map
+                    and k not in ["trigger_levels", "first_available", "description", "sources"]}
     if extra_fields:
         existing_notes = record.get("notes", "")
         extra_json = json.dumps(extra_fields)

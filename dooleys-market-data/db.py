@@ -74,7 +74,24 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent, cheap schema migrations for already-created DBs.
+
+    The DB is rebuildable from schema.sql + catalog, so these ALTERs are only to
+    avoid forcing a full re-backfill when the schema gains a column. Safe to call
+    on every connection.
+    """
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(ingest_runs)")}
+    except sqlite3.OperationalError:
+        return  # table not created yet (fresh DB before init) — nothing to migrate
+    if cols and "served_by" not in cols:
+        conn.execute("ALTER TABLE ingest_runs ADD COLUMN served_by TEXT")
+        conn.commit()
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -239,15 +256,20 @@ def log_ingest(
     to_date: Optional[Union[str, date]] = None,
     status: str = "success",
     error: Optional[str] = None,
+    served_by: Optional[str] = None,
 ) -> int:
     """
     Log an ingest run. Returns the run_id.
+
+    served_by: the source that actually produced the rows (provenance for the
+    failover chain), or None when no source served / not applicable.
     """
     ts = datetime.utcnow().isoformat() + "Z"
     cur = conn.execute(
         """
-        INSERT INTO ingest_runs (series_id, ts, rows_added, from_date, to_date, status, error)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO ingest_runs
+            (series_id, ts, rows_added, from_date, to_date, status, error, served_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             series_id,
@@ -257,6 +279,7 @@ def log_ingest(
             _to_date_str(to_date) if to_date else None,
             status,
             error,
+            served_by,
         ),
     )
     conn.commit()
@@ -274,7 +297,7 @@ def get_last_ingest(
     by the health/doctor logic — far more reliable than days-since-latest-data.
     """
     row = conn.execute(
-        "SELECT status, ts, rows_added, error FROM ingest_runs "
+        "SELECT status, ts, rows_added, error, served_by FROM ingest_runs "
         "WHERE series_id = ? ORDER BY run_id DESC LIMIT 1",
         (series_id,),
     ).fetchone()

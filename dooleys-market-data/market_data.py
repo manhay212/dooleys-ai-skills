@@ -115,8 +115,7 @@ def cmd_backfill(args: argparse.Namespace) -> None:
             ticker = s["ticker"]
             sid = s["series_id"]
             table_kind = s["table_kind"]
-            source_name = s["source"]
-            
+
             # Check if recently updated (within 1 day) — resumable
             last_upd = s.get("last_updated")
             if last_upd:
@@ -128,33 +127,29 @@ def cmd_backfill(args: argparse.Namespace) -> None:
                         "reason": f"Updated {last_date} — within 1 day",
                     })
                     continue
-            
-            # Fetch data from source adapter
-            source_cfg = sources_config.get("sources", {}).get(source_name, {})
-            rate_limit = source_cfg.get("rate_limit_per_min", 60)
-            
+
             try:
-                df, from_date, to_date = _fetch_from_source(
-                    source_name, s, source_cfg, catalog, backfill=True
+                df, from_date, to_date, served_by = _fetch_with_failover(
+                    s, sources_config, catalog, backfill=True
                 )
-                
+
                 if df is None or df.empty:
                     results.append({
                         "ticker": ticker, "status": "empty",
-                        "reason": "No data returned from source",
+                        "reason": "No data returned from any source in chain",
                     })
                     continue
-                
+
                 # UPSERT
                 if table_kind == "ohlcv":
                     rows = upsert_ohlcv(conn, sid, df)
                 else:
                     rows = upsert_observations(conn, sid, df)
-                
+
                 # Update last_updated
                 max_date = df["date"].max()
                 update_series_last_updated(conn, sid, max_date)
-                
+
                 # Update first_available if needed
                 min_date = df["date"].min()
                 if s.get("first_available") is None:
@@ -164,22 +159,23 @@ def cmd_backfill(args: argparse.Namespace) -> None:
                         (_to_date_str(min_date), sid),
                     )
                     conn.commit()
-                
+
                 # Log ingest
-                run_id = log_ingest(conn, sid, rows, from_date, to_date, "success")
-                
-                logger.info("Backfilled %s: %d rows, %s to %s (run %d)",
+                run_id = log_ingest(conn, sid, rows, from_date, to_date, "success",
+                                    served_by=served_by)
+
+                logger.info("Backfilled %s: %d rows, %s to %s via %s (run %d)",
                             ticker, rows, _to_date_str(from_date) if from_date else "?",
-                            _to_date_str(to_date) if to_date else "?", run_id)
-                
+                            _to_date_str(to_date) if to_date else "?", served_by, run_id)
+
                 results.append({
                     "ticker": ticker, "status": "success",
-                    "rows_added": rows,
+                    "rows_added": rows, "served_by": served_by,
                     "from_date": _to_date_str(from_date),
                     "to_date": _to_date_str(to_date),
                     "run_id": run_id,
                 })
-                
+
             except Exception as exc:
                 logger.error("Failed to backfill %s: %s", ticker, exc)
                 log_ingest(conn, sid, 0, None, None, "error", str(exc))
@@ -243,18 +239,16 @@ def _update_one(conn, s, sources_config, catalog) -> Dict[str, Any]:
     ticker = s["ticker"]
     sid = s["series_id"]
     table_kind = s["table_kind"]
-    source_name = s["source"]
 
     last_date = s.get("last_updated")
     last_date_obj = _parse_date_arg(str(last_date)[:10]) if last_date else None
-    source_cfg = sources_config.get("sources", {}).get(source_name, {})
 
-    df, from_date, to_date = _fetch_from_source(
-        source_name, s, source_cfg, catalog, backfill=False, since=last_date_obj,
+    df, from_date, to_date, served_by = _fetch_with_failover(
+        s, sources_config, catalog, backfill=False, since=last_date_obj,
     )
 
     if df is None or df.empty:
-        # Reached the source, nothing newer available — record it so the health
+        # Reached the source(s), nothing newer available — record it so the health
         # check can distinguish "current with source" from "broken".
         log_ingest(conn, sid, 0, from_date, to_date, "no_new_data")
         return {"ticker": ticker, "status": "no_new_data", "reason": "No new data available"}
@@ -263,7 +257,7 @@ def _update_one(conn, s, sources_config, catalog) -> Dict[str, Any]:
         df = _filter_after(df, last_date_obj)
 
     if df.empty:
-        log_ingest(conn, sid, 0, from_date, to_date, "no_new_data")
+        log_ingest(conn, sid, 0, from_date, to_date, "no_new_data", served_by=served_by)
         return {"ticker": ticker, "status": "no_new_data"}
 
     if table_kind == "ohlcv":
@@ -272,9 +266,9 @@ def _update_one(conn, s, sources_config, catalog) -> Dict[str, Any]:
         rows = upsert_observations(conn, sid, df)
 
     update_series_last_updated(conn, sid, df["date"].max())
-    run_id = log_ingest(conn, sid, rows, from_date, to_date, "success")
+    run_id = log_ingest(conn, sid, rows, from_date, to_date, "success", served_by=served_by)
     return {
-        "ticker": ticker, "status": "success", "rows_added": rows,
+        "ticker": ticker, "status": "success", "rows_added": rows, "served_by": served_by,
         "from_date": _to_date_str(from_date), "to_date": _to_date_str(to_date),
         "run_id": run_id,
     }
@@ -424,6 +418,8 @@ def _series_health(conn, today: Optional[date] = None) -> List[Dict[str, Any]]:
         latest_date = get_latest_date(conn, sid, s["table_kind"])
         last_ingest = get_last_ingest(conn, sid)
         last_status = last_ingest["status"] if last_ingest else None
+        served_by = last_ingest.get("served_by") if last_ingest else None
+        primary_source = s["source"]
         status, reason = health.classify_series_freshness(
             frequency=s.get("frequency"),
             latest_date=latest_date,
@@ -435,7 +431,10 @@ def _series_health(conn, today: Optional[date] = None) -> List[Dict[str, Any]]:
             "ticker": s["ticker"],
             "name": s["name"],
             "asset_class": s.get("asset_class"),
-            "source": s["source"],
+            "source": primary_source,
+            "primary_source": primary_source,
+            "served_by": served_by,
+            "fell_back": bool(served_by and served_by != primary_source),
             "frequency": s.get("frequency") or "daily",
             "latest_date": latest_date,
             "status": status,
@@ -685,98 +684,191 @@ def cmd_import(args: argparse.Namespace) -> None:
         conn.close()
 
 
-# ─── source adapter dispatch ─────────────────────────────────────────────────
+# ─── source adapter dispatch (failover chain) ────────────────────────────────
 
-def _fetch_from_source(
-    source_name: str,
+def _source_available(source_name: str, sources_config: Dict[str, Any]) -> bool:
+    """A source is usable iff its credential prerequisite is met.
+
+    - auth_env is None/absent -> always available (keyless: yahoo_direct, yahoo,
+      treasury, stooq).
+    - auth_env set            -> available iff that env var is non-empty.
+    - unknown source name     -> unavailable (skip, don't crash).
+
+    This is what lets `eodhd` sit dormant in a chain until EODHD_API_KEY exists:
+    with no key it is silently skipped; the day the key appears it activates with
+    no catalog or code change.
+    """
+    sources = sources_config.get("sources", {})
+    if source_name not in sources:
+        return False
+    auth_env = sources[source_name].get("auth_env")
+    if not auth_env:
+        return True
+    return bool(os.getenv(auth_env))
+
+
+def _normalize_kind(df: "pd.DataFrame", target_kind: str) -> "pd.DataFrame":
+    """Coerce an adapter's frame to the series' canonical table_kind.
+
+    - target 'ohlcv' but frame is observations (only 'value'): value -> close and
+      adj_close; open/high/low/volume left absent (NaN on upsert).
+    - target 'observations' but frame is ohlcv: adj_close (else close) -> value.
+    - already-matching frames pass through untouched.
+    Operates on a frame that still has 'date' as a column or the index.
+    """
+    if df is None or df.empty:
+        return df
+    cols = set(df.columns)
+    if target_kind == "ohlcv" and "value" in cols and "close" not in cols:
+        df = df.copy()
+        df["close"] = df["value"]
+        df["adj_close"] = df["value"]
+        df = df.drop(columns=["value"])
+    elif target_kind == "observations" and "value" not in cols:
+        df = df.copy()
+        src_col = "adj_close" if "adj_close" in cols else ("close" if "close" in cols else None)
+        if src_col is None:
+            return df.iloc[0:0]  # nothing usable -> empty, let failover continue
+        df["value"] = df[src_col]
+        keep = [c for c in ("date", "value") if c in df.columns]
+        df = df[keep] if "date" in df.columns else df[["value"]]
+    return df
+
+
+def _resolve_chain(series_info: Dict[str, Any], catalog: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the ordered source chain for this series.
+
+    The chain lives in catalog.yaml, but the series dict handed to the fetcher
+    comes from the DB (get_series) and only carries the legacy source/source_symbol.
+    So prefer the catalog entry (matched by ticker); fall back to whatever the
+    series_info itself declares (legacy single-source rows, and unit tests that
+    pass an inline `sources` list).
+    """
+    from catalog import normalize_sources
+    ticker = series_info.get("ticker")
+    for ac_info in catalog.get("asset_classes", {}).values():
+        if not isinstance(ac_info, dict):
+            continue
+        for cat_series in ac_info.get("series", []):
+            if isinstance(cat_series, dict) and cat_series.get("ticker") == ticker:
+                refs = normalize_sources(cat_series)
+                if refs:
+                    return refs
+    return normalize_sources(series_info)
+
+
+def _inject_eia_route(adapter_cfg: Dict[str, Any], catalog: Dict[str, Any],
+                      series_info: Dict[str, Any]) -> None:
+    for ac_info in catalog.get("asset_classes", {}).values():
+        if not isinstance(ac_info, dict):
+            continue
+        for cat_series in ac_info.get("series", []):
+            if isinstance(cat_series, dict) and cat_series.get("ticker") == series_info.get("ticker"):
+                route = cat_series.get("eia_route")
+                if route:
+                    adapter_cfg["route"] = route
+                return
+
+
+def _fetch_with_failover(
     series_info: Dict[str, Any],
-    source_cfg: Dict[str, Any],
+    sources_config: Dict[str, Any],
     catalog: Dict[str, Any],
     backfill: bool = True,
     since: Optional[date] = None,
 ) -> tuple:
-    """
-    Dispatch to the appropriate source adapter to fetch data.
-    
-    Returns (DataFrame, from_date, to_date).
-    DataFrame has a 'date' column and OHLCV columns or 'value' column.
-    Returns (None, since, to_date) if adapter is unavailable or returns no data.
-    
-    Uses the adapter registry in sources/__init__.py.
-    Each adapter exposes a fetch(source_symbol, start, end, cfg) function
-    that returns a pd.DataFrame indexed by date.
+    """Try each source in the series' chain until one returns non-empty data.
+
+    Returns (DataFrame|None, from_date, to_date, served_by|None). Skips
+    unavailable sources (missing credentials). Records provenance via served_by
+    (the source that produced the rows). Only returns (None, ..., None) when
+    EVERY source in the chain fails or empties.
+
+    DataFrame (on success) has a 'date' column plus OHLCV or 'value' columns,
+    normalized to the series' canonical table_kind.
     """
     from sources import get_adapter
-    
-    source_symbol = series_info["source_symbol"]
-    
-    # Default lookback
+
+    target_kind = series_info.get("table_kind", "observations")
+    chain = _resolve_chain(series_info, catalog)  # catalog is source of truth
+
     backfill_years = catalog.get("defaults", {}).get("backfill_years", 30)
-    sources_cfg = catalog.get("sources", {})
-    
-    # Compute date range
     if backfill and since is None:
         from_date = date.today() - timedelta(days=int(backfill_years * 365.25))
     elif since is not None:
         from_date = since
     else:
         from_date = date.today() - timedelta(days=7)
-    
     to_date = date.today()
-    
-    start_str = from_date.strftime("%Y-%m-%d") if from_date else None
-    end_str = to_date.strftime("%Y-%m-%d") if to_date else None
-    
-    try:
-        adapter_mod = get_adapter(source_name)
-    except (ImportError, AttributeError) as exc:
-        logger.warning(
-            "Cannot load adapter for source '%s': %s. Skipping %s.",
-            source_name, exc, series_info["ticker"],
-        )
-        return None, from_date, to_date
-    
-    # Build adapter config: merge source config with extra series fields
-    adapter_cfg = dict(source_cfg)
-    adapter_cfg["series_info"] = series_info
+    start_str = from_date.strftime("%Y-%m-%d")
+    end_str = to_date.strftime("%Y-%m-%d")
 
-    # Propagate essential series fields to adapter config top-level
-    for key in ("table_kind", "frequency", "unit"):
-        if key in series_info and key not in adapter_cfg:
-            adapter_cfg[key] = series_info[key]
+    last_error: Optional[str] = None
+    any_reached = False  # did any source respond at all (even empty, no raise)?
+    for ref in chain:
+        source_name = ref["source"]
+        if not _source_available(source_name, sources_config):
+            logger.debug("Skipping unavailable source '%s' for %s",
+                         source_name, series_info.get("ticker"))
+            continue
+        try:
+            adapter_mod = get_adapter(source_name)
+        except (ImportError, AttributeError) as exc:
+            logger.warning("Adapter '%s' unavailable for %s: %s",
+                           source_name, series_info.get("ticker"), exc)
+            last_error = str(exc)
+            continue
 
-    # Map catalog-specific config keys to adapter-expected keys
-    if source_name == "eia":
-        # Look up eia_route from catalog (stored as extra field, not in DB)
-        for ac_name, ac_info in catalog.get("asset_classes", {}).items():
-            if not isinstance(ac_info, dict):
-                continue
-            for cat_series in ac_info.get("series", []):
-                if cat_series.get("ticker") == series_info.get("ticker"):
-                    route = cat_series.get("eia_route")
-                    if route:
-                        adapter_cfg["route"] = route
-                    break
-    
-    try:
-        df = adapter_mod.fetch(source_symbol, start_str, end_str, adapter_cfg)
-    except Exception as exc:
-        logger.error("Adapter '%s' fetch failed for %s: %s", source_name, source_symbol, exc)
-        raise
-    
-    if df is None or df.empty:
-        return None, from_date, to_date
-    
-    # Ensure DataFrame has a 'date' column
-    if df.index.name == "date" or (isinstance(df.index, pd.DatetimeIndex) and "date" not in df.columns):
-        df = df.reset_index()
-    if "date" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
-        df = df.reset_index()
-    
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"])
-    
-    return df, from_date, to_date
+        source_cfg = sources_config.get("sources", {}).get(source_name, {})
+        adapter_cfg = dict(source_cfg)
+        adapter_cfg["series_info"] = series_info
+        # The provider's NATIVE kind for THIS ref (so the adapter emits the right shape).
+        adapter_cfg["table_kind"] = ref.get("kind") or target_kind
+        for key in ("frequency", "unit"):
+            if key in series_info and key not in adapter_cfg:
+                adapter_cfg[key] = series_info[key]
+        if source_name == "eia":
+            _inject_eia_route(adapter_cfg, catalog, series_info)
+
+        try:
+            df = adapter_mod.fetch(ref["symbol"], start_str, end_str, adapter_cfg)
+        except Exception as exc:  # noqa: BLE001 — try the next source
+            logger.warning("Source '%s' fetch raised for %s (%s): %s",
+                           source_name, series_info.get("ticker"), ref["symbol"], exc)
+            last_error = str(exc)
+            continue
+
+        any_reached = True  # adapter responded without raising (even if empty)
+        if df is None or df.empty:
+            logger.info("Source '%s' returned no data for %s (%s); trying next",
+                        source_name, series_info.get("ticker"), ref["symbol"])
+            continue
+
+        # Ensure a 'date' column (adapters may index by date).
+        if df.index.name == "date" or (isinstance(df.index, pd.DatetimeIndex) and "date" not in df.columns):
+            df = df.reset_index()
+        if "date" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+
+        df = _normalize_kind(df, target_kind)
+        if df is None or df.empty:
+            continue
+
+        return df, from_date, to_date, source_name
+
+    # Nothing served. If NO source was even reachable and something hard-errored,
+    # raise so the outer handler logs it as 'error' (broken) — matches the old
+    # single-source semantics. If at least one source was reached but returned
+    # empty (e.g. genuinely no new data, or a soft 429), fall through to None so
+    # the caller records 'no_new_data'.
+    if not any_reached and last_error:
+        raise RuntimeError(f"all sources unreachable: {last_error}")
+    if last_error:
+        logger.error("All sources failed for %s (last error: %s)",
+                     series_info.get("ticker"), last_error)
+    return None, from_date, to_date, None
 
 
 # ─── helpers ─────────────────────────────────────────────────────────────────

@@ -1,7 +1,52 @@
 # Source Adapter Reliability & Pitfalls
 
-Last updated: 2026-06-22 (v1.3.0: `daily` command + doctor redesign; pandas-3.x date-filter
-fix; Treasury TGA_DAILY restored; KOL series added)
+Last updated: 2026-07-09 (v1.4.0: per-series source failover chain + provenance; `yahoo_direct`
+adapter via curl_cffi; dormant `eodhd` adapter)
+
+## 2026-07-09 — v1.4.0: source failover + yahoo_direct + dormant eodhd
+
+- **Per-series source failover.** Catalog `source:` can now be an ordered `sources: [chain]`
+  (each ref `{source, symbol, kind?}`). `_fetch_with_failover` tries each *available* source
+  until one returns non-empty data, records `served_by` in `ingest_runs`, and only flags
+  `needs_attention` when all fail. Legacy single-source entries still work (one-element chain).
+  The chain is re-read from `catalog.yaml` by ticker at fetch time (`_resolve_chain`) — the DB
+  `series` row only stores the primary (chain[0]).
+- **Credential gating (`_source_available`).** A source with a set `auth_env` is skipped unless
+  that env var is non-empty. This is what keeps `eodhd` dormant until `EODHD_API_KEY` exists —
+  verified: with the key set the engine calls eodhd and falls through on failure; unset, it logs
+  "Skipping unavailable source 'eodhd'" and never calls it.
+- **Shape normalization (`_normalize_kind`).** A fallback that returns a different `table_kind`
+  than the series is coerced (obs `value` → ohlcv `close`/`adj_close`, and vice-versa).
+- **Provenance rendering.** `UPDATE_LOG.md` gained a **Served by** column; `⚠` = a fall-back
+  served (primary degrading). `served_by` persists through `no_new_data` days too (the source
+  is reached and returns the existing bar, filtered as "not newer" but still recorded).
+- **`_migrate` in db.get_connection** adds `ingest_runs.served_by` idempotently to an existing
+  DB (ALTER TABLE guarded by PRAGMA), so no full re-backfill is needed. schema.sql is also the
+  schema of record (host-side, hermes-backup).
+
+## yahoo_direct (v8 chart via curl_cffi) — the new price primary
+
+**Reliability:** ★★★★☆ — direct hit to `query{1,2}.finance.yahoo.com/v8/finance/chart/{sym}`.
+The v8 chart endpoint is **crumbless** (no cookie/crumb needed, unlike v7 download).
+
+**The key finding (live-verified 2026-07):** plain `requests` gets **HTTP 429** from Yahoo on
+datacenter IPs even on the first call — Yahoo fingerprints the Python TLS handshake. `curl_cffi`
+with `impersonate="chrome"` returns **200** from the same IP. So `yahoo_direct` uses `curl_cffi`
+when available (it's a yfinance dependency; also pinned in requirements.txt) and falls back to
+`requests` with a rotating UA. Also rotates query1↔query2 and retries with exp backoff + jitter.
+
+**Why keep both `yahoo_direct` AND `yahoo` (yfinance)?** Two independent code paths to the same
+data = genuine redundancy in a chain; they fail differently (verified: from a blocked IP the
+yfinance path succeeded where a naive direct call 429'd, and vice-versa is possible).
+
+**Symbols:** standard Yahoo (`^GSPC`, `^KS11`, `000001.SS`, `^GDAXI`, `GC=F`, `DX-Y.NYB`, `MSTR`).
+
+## eodhd (dormant until key) — the licensed escape hatch
+
+**Reliability:** licensed EOD, global (indices/single-names/FX/crypto). **Dormant by default:**
+`auth_env: EODHD_API_KEY`; with no key `_source_available` skips it and `fetch()` returns empty.
+Ships complete so activation is *set the env var* (+ optional chain reorder). Symbols use the
+exchange-suffix form: `GSPC.INDX`, `KS11.INDX`, `NVDA.US`, `0700.HK`.
 
 ## 2026-06-22 overhaul — what changed and why
 
@@ -63,9 +108,9 @@ fix; Treasury TGA_DAILY restored; KOL series added)
 
 **Working tickers:** SPX, NDX, RUT, SOX, HSI, N225, GC=F, SI=F, PL=F, HG=F, DXY, TLT, HYG, MOVE
 
-## Stooq (DEPRECATED — June 2026)
+## Stooq (DEPRECATED — June 2026; re-verified dead 2026-07-09)
 
-**Reliability:** ☆☆☆☆☆ — Dead. Cloudflare JS challenge walls all programmatic access (curl, Python requests, browsers without JS). Returns HTML challenge page instead of CSV.
+**Reliability:** ☆☆☆☆☆ — Dead. Cloudflare JS challenge walls all programmatic access (curl, Python requests, browsers without JS). Returns HTML challenge page instead of CSV. Re-tested 2026-07-09: `stooq.com/q/d/l/?s=^spx&i=d` still returns a `<noscript>` challenge page (HTTP 200, no CSV). Not revived for the failover chains.
 
 **Migration:** All Stooq tickers moved to Yahoo Finance (yfinance). Stooq adapter kept in repo for reference but marked `status: deprecated` in sources.yaml.
 

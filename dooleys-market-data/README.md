@@ -43,9 +43,21 @@ Set these in `~/.hermes/.env` (env vars take priority over any config file):
 | `FRED_API_KEY` | yes | https://fred.stlouisfed.org/docs/api/api_key.html (free) |
 | `EIA_API_KEY` | yes | https://www.eia.gov/opendata/register.php (free) |
 | `COINGECKO_API_KEY` | optional | CoinGecko demo key (works keyless at lower limits) |
+| `EODHD_API_KEY` | optional (dormant) | https://eodhd.com — unset by default; setting it activates the `eodhd` source in any catalog chain that lists it (no code change) |
+| `TWELVEDATA_API_KEY` | optional (dormant) | https://twelvedata.com — only used if referenced in a chain |
 
-> Run with the host venv python so pandas/pyarrow/yfinance are available:
+> Run with the host venv python so pandas/pyarrow/yfinance/curl_cffi are available:
 > `~/.hermes/hermes-agent/venv/bin/python3 market_data.py …`
+
+### Source failover (v1.4.0)
+
+A catalog series may list an ordered `sources: [chain]`; the engine tries each *available*
+source until one returns data, records which one served it (`UPDATE_LOG.md` → **Served by**
+column, `⚠` = fall-back served), and only flags a series when *all* sources fail. The price
+primary is `yahoo_direct` (direct Yahoo v8 chart via `curl_cffi` browser impersonation, which
+defeats the anti-bot 429s that plain `requests` trips), with `yahoo` (yfinance) and, where
+available, `fred` as fallbacks. `eodhd` is shipped **dormant** — see `SKILL.md` for how a single
+`EODHD_API_KEY` activates it. Legacy single-source series keep working unchanged.
 
 ## Quickstart
 
