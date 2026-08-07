@@ -60,17 +60,24 @@ def new_context(playwright, headed: bool = False, viewport: Optional[dict] = Non
 def is_logged_in(page) -> bool:
     """Detect auth state reliably.
 
-    Logged-OUT pages carry a login affordance — the username input (on /login) and/or a
-    link to `/login` plus a "Continue with Instagram" button (on home/profile pages).
-    Logged-in pages have none of these. (The username-input-only check used to false-
-    positive on public pages, which don't force the form.)
+    Positive signal: [data-pressable-container] post cards → logged in.
+    Negative signals: username input + no feed → logged-out /login page.
+    (The login-link-only check used to false-positive on feed pages that now carry a
+    "Log in with username instead" link even when authenticated.)
     """
     try:
-        logged_out = (
-            page.locator('input[autocomplete="username"]').count() > 0
-            or page.locator('a[href*="/login"]').count() > 0
-        )
-        return not logged_out
+        # Strong positive signal — feed posts are only visible when logged in.
+        if page.locator("[data-pressable-container]").count() > 0:
+            return True
+        # Negative signal — username input visible and NO feed → login page.
+        if page.locator('input[autocomplete="username"]').count() > 0:
+            return False
+        # Ambiguous: no feed, no username input. Check for login link as a weaker
+        # negative signal (still logged-out on profile/home when session is dead).
+        if page.locator('a[href*="/login"]').count() > 0:
+            return False
+        # Nothing clear either way — assume logged in.
+        return True
     except Exception:
         return False
 
