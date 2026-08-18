@@ -125,7 +125,7 @@ python3 market_data.py export --format parquet   # first snapshot → exports/ma
         "skill": "dooleys-market-data",
         "schedule": {"kind": "cron", "expr": "0 9 * * 1"},
         "deliver": "origin",
-        "origin": {"platform": "whatsapp", "chat_id": "212802778194016@lid", "chat_name": "Man Hay Hong"},
+        "origin": {"platform": "whatsapp", "chat_id": "<your_lid>@lid", "chat_name": "<Your Name>"},
         "enabled": true,
         "prompt": "Produce the weekly market regime & turning-point briefing. Steps: (1) Run `python3 market_data.py query dashboard --group macro-rates,macro-fed-liquidity,macro-inflation-growth,macro-credit-stress,equity-index,volatility,precious-metals,industrial-metals,energy,fx,crypto` from ~/.hermes/custom-skills/dooleys-market-data. (2) For each major theme, note latest reading, percentile-vs-history, z-score, and distance-to-trigger. (3) Compute/inspect key ratios: copper/gold (HG=F/GC=F), MOVE vs VIX, BTC vs net-liquidity proxy (WALCL-RRP-TGA). (4) Cross-reference KOL trigger levels and latest views in docs/investment/kol/*/KEY_INDICATORS.md and LATEST_VIEWS.md. (5) Web-search the past week's material macro events (CPI/jobs/FOMC/geopolitics) and log notable ones via `add-event`. (6) Assess where we are in each major cycle (Hayes liquidity, commodity rotation per PRECIOUS_METALS_CRYPTO_ROTATION.md) and how close/far we are from turning points, citing the actual data. (7) End with 'What to watch next'. Keep to ~600 words, WhatsApp *bold* for section headers. This is mid/long-term regime analysis, NOT trade signals."
       }
