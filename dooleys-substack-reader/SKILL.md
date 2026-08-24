@@ -240,6 +240,11 @@ python3 substack_posts.py                      # read post_links.json
 - **Custom-domain publications:** resolution here relies on the `<subdomain>.substack.com` host.
   Publications served only on a custom domain (no substack subdomain) are out of scope for now.
 - **Volume:** `--list-limit` caps how many recent posts are scanned per publication before the time
-  window is applied; keep account lists and windows modest to stay unobtrusive.
+  window is applied; keep account lists and windows modest to stay unobtrusive. **IMPORTANT
+  (verified 2026-08-24):** Substack's `posts` endpoint returns HTTP 400 for large `limit` values
+  (observed `limit=60` → 400, `limit=12` → 200). The reader does NOT paginate via `offset`. For a
+  deep backfill beyond the default window, write a small pagination loop with `limit=12` +
+  `offset=12,24,36,...` against `https://<subdomain>.substack.com/api/v1/posts` and stop once post
+  dates fall below your cutoff.
 - **Full content:** the reader fetches each in-window post's single-post endpoint for the
   authoritative body (the list endpoint usually includes `body_html` too, used as a fallback).
