@@ -128,6 +128,11 @@ Series live in `$MARKET_DATA_DIR/config/catalog.yaml` (the user's private catalo
 this repo). Add a ticker = append to catalog → `sync-catalog` → `backfill --ticker X`. No
 code change. Optional per-series field `staleness_grace_days` widens the "late" bound.
 
+> **Gotcha (sync-catalog vs manual source edits):** `sync-catalog` recomputes series metadata from
+> `catalog.yaml` and does **not** preserve a manual `UPDATE` to a series' `source`/`series.source`
+> field — it overwrites hand-edited sources. Change sources in `catalog.yaml` (edit the chain),
+> then run `sync-catalog`; never rely on a direct DB update to `series.source` surviving.
+
 | Source | Status | Coverage |
 |--------|--------|----------|
 | `yahoo_direct` | ✅ primary for prices | direct Yahoo v8 chart via curl_cffi browser impersonation (defeats anti-bot 429s); equity indices (incl. ex-US), single names, ETFs, futures, DXY, MOVE |
