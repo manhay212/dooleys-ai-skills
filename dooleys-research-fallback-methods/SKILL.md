@@ -72,6 +72,36 @@ for pid, page in pages.items():
 - Revision timestamps reflect when Wikipedia was edited, not necessarily the exact date of the real-world change (but usually close)
 - Some organizational pages use templates that are harder to parse
 
+## Technique 2: r.jina.ai Markdown Proxy (universal fallback)
+
+For ANY URL (article, search result, docs page) that is JS-walled or CAPTCHA'd, prepend `https://r.jina.ai/` to get clean markdown:
+
+```
+https://r.jina.ai/<URL>   →  returns the page as markdown
+```
+
+This is the single most reliable fallback when Google/Bing/DuckDuckGo block or mangle content.
+
+### CJK (Chinese) search via r.jina.ai + DuckDuckGo HTML
+
+For Chinese-language queries, DDG HTML via r.jina.ai works where direct scraping fails:
+
+```
+https://r.jina.ai/https://html.duckduckgo.com/html/?q=<query>
+# then grep for '## [' to get result headings
+```
+
+Note: Google/Baidu/Bing CAPTCHA or badly mangle CJK queries — avoid them for Chinese content.
+
+## Technique 3: Google Maps for location/business lookup
+
+Use `browser_navigate` to `https://www.google.com/maps/search/<query>` for local business/venue lookups (works via browser where text search engines fail).
+
+## Technique 4: Structured data sources for specific facts
+
+- **Gold spot prices:** HKGoldRate.com and goldpricez.com (reliable, scrape-friendly).
+- **Chinese entity facts:** zh.wikipedia.org for Chinese-language Wikipedia content (also see Technique 1).
+
 ## Pitfalls
 
 - **rvstart is a "at or before" filter**, not an exact match. When bisecting, revisions at the exact timestamp may not be returned if they're slightly before it. Use generous timestamp windows.
