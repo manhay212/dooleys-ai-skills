@@ -100,3 +100,7 @@ A folder `dooleys-{skill-name}/` that is everything an agent needs to perform on
   `polymarket_common.py` (pure signal/scoring logic, unit-tested). Macro vs. noise handled by a
   category allowlist + significance score (extreme consensus / big move / conviction / toss-up);
   the agent does the investment interpretation. Keys not required.
+- **dooleys-security-audit** — vendored Cloudflare skill (MIT): multi-phase security-audit methodology
+  (recon → coverage-led hunting → adversarial validation → structured `findings.json` → independent
+  record verification → target-neutral reports) across 13 attack classes. Guidance mode by default;
+  full audit needs a coding agent + OS sandbox. No API keys. See its `README.md` for update steps.

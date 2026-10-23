@@ -22,6 +22,7 @@ When an AI agent detects a user request that matches a skill's description, it l
 | [dooleys-market-data](./dooleys-market-data/) | Market-data engine — backfills/updates numeric time-series from free sources into SQLite and returns compact computed summaries (stats/ratio/spread/dashboard). **v1.4.0:** per-series source **failover chains** with provenance, hardened `yahoo_direct` (Yahoo v8 via curl_cffi), and a dormant-until-key `eodhd` source. One-shot `daily` routine writes a trustworthy UPDATE_LOG; fetch-result-based health check | 1.4.0 |
 | [dooleys-feedback-learner](./dooleys-feedback-learner/) | Metacognitive skill — extracts transferable principles from user corrections (Warp feedback loop thesis) | 1.0.0 |
 | [dooleys-polymarket-reader](./dooleys-polymarket-reader/) | Read macro/investment signals from Polymarket prediction markets via public keyless APIs — scan curated macro categories for significant markets (extreme consensus, big moves, conviction volume, high-stakes tossups), keyword-search ad-hoc, or deep-dive one event with optional odds history. De-noise pipeline filters pop-culture/sports noise by default. No API key required. | 1.0.0 |
+| [dooleys-security-audit](./dooleys-security-audit/) | Vendored Cloudflare skill (MIT) — multi-phase security audits: recon → coverage-led hunting → adversarial validation → structured `findings.json` → independent record verification → target-neutral reports, across 13 attack classes. Guidance mode by default; full audit needs a coding agent + OS sandbox. | 1.0.0 |
 
 ## Repository Structure
 
