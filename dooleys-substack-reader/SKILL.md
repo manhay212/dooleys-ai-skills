@@ -241,12 +241,10 @@ python3 substack_posts.py                      # read post_links.json
   Publications served only on a custom domain (no substack subdomain) are out of scope for now.
 - **Volume:** `--list-limit` caps how many recent posts are scanned per publication before the time
   window is applied; keep account lists and windows modest to stay unobtrusive. **IMPORTANT
-  (verified 2026-08-24):** Substack's `posts` endpoint returns HTTP 400 for large `limit` values
-  (observed `limit=60` → 400, `limit=12` → 200). **IMPORTANT (verified 2026-11-03):** the endpoint
-  now ALSO rejects `offset=0` with `HTTP 400 {"msg":"Invalid value"}`, so `substack_client.py`
-  omits `offset` entirely when it is `0`. For a
-  deep backfill beyond the default window, write a small pagination loop with `limit=12` +
-  `offset=12,24,36,...` against `https://<subdomain>.substack.com/api/v1/posts` and stop once post
-  dates fall below your cutoff.
+  (verified 2026-11-03):** Substack's `posts` endpoint rejects `limit > 50` (`limit=60` → HTTP 400
+  "Invalid value"; `limit ≤ 50` → 200) and rejects the `offset` query param for **any** value
+  (`offset=0,1,12,...` → HTTP 400 "Invalid value"). `substack_client.list_posts()` therefore never
+  sends `offset` — offset-based pagination is no longer available, so a deep backfill beyond the
+  default window must use `--list-limit` up to 50 (the hard ceiling).
 - **Full content:** the reader fetches each in-window post's single-post endpoint for the
   authoritative body (the list endpoint usually includes `body_html` too, used as a fallback).

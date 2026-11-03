@@ -65,11 +65,10 @@ class SubstackClient:
     def list_posts(self, subdomain: str, limit: int = 12, offset: int = 0) -> list:
         """List a publication's posts, newest first."""
         url = f"https://{subdomain}.substack.com/api/v1/posts"
-        params = {"limit": limit}
-        if offset:
-            # Substack rejects offset=0 ("Invalid value"); omit it entirely.
-            params["offset"] = offset
-        data = self._get_json(url, params=params)
+        # Substack rejects the `offset` query param for ANY value (HTTP 400
+        # "Invalid value") and caps `limit` at 50. `offset` is kept in the
+        # signature for call-site compatibility but is never sent.
+        data = self._get_json(url, params={"limit": limit})
         if isinstance(data, list):
             return data
         if isinstance(data, dict):
